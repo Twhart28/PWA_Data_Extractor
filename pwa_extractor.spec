@@ -2,11 +2,11 @@
 
 
 a = Analysis(
-    ['pwa_converter.py'],
+    ['pwa_extractor.py'],
     pathex=[],
     binaries=[],
-    datas=[('App_Logo.ico', '.'), ('startup_image.png', '.')],
-    hiddenimports=[],
+    datas=[('App_Logo.ico', '.'), ('README.md', '.')],
+    hiddenimports=['app', 'backend', 'PySide6.QtPdf', 'PySide6.QtPdfWidgets'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='pwa_converter',
+    name='pwa_extractor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
