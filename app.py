@@ -351,7 +351,7 @@ class MainWindow(QMainWindow):
         self.info_button = QToolButton()
         self.info_button.setObjectName("infoButton")
         self.info_button.setText("?")
-        self.info_button.setToolTip("Open instructions and repository details")
+        self.info_button.setToolTip("Open app overview, workflow notes, and repository details")
         self.info_button.clicked.connect(self.show_info_dialog)
 
         title_row.addWidget(title)
@@ -545,10 +545,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         header_card = QFrame()
-        header_card.setObjectName("subpanel")
+        header_card.setObjectName("resultsHeaderCard")
         header_layout = QHBoxLayout(header_card)
-        header_layout.setContentsMargins(16, 14, 16, 14)
-        header_layout.setSpacing(14)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(12)
 
         header_copy = QWidget()
         header_copy_layout = QVBoxLayout(header_copy)
@@ -603,6 +603,17 @@ class MainWindow(QMainWindow):
                 self.all_data_table.viewport(),
                 self.averaged_table.viewport(),
             }
+            if source is self.patient_list.viewport():
+                scrollbar = self.patient_list.verticalScrollBar()
+                delta = event.angleDelta().y()
+                steps = delta / 120
+                base_step = max(1, scrollbar.singleStep())
+                scroll_amount = max(1, int(round(abs(steps) * base_step / 2)))
+                if steps > 0:
+                    scrollbar.setValue(scrollbar.value() - scroll_amount)
+                elif steps < 0:
+                    scrollbar.setValue(scrollbar.value() + scroll_amount)
+                return True
             if (
                 event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                 and source
@@ -770,7 +781,7 @@ class MainWindow(QMainWindow):
         self.pair_table.setColumnWidth(3, 68)
         self.pair_table.setColumnWidth(4, 96)
         self.pair_table.setColumnWidth(5, 96)
-        self.pair_table.setColumnWidth(6, 320)
+        self.pair_table.setColumnWidth(6, 280)
         self.pair_table.setColumnWidth(7, 118)
         self.pair_table.horizontalScrollBar().setValue(0)
 
@@ -786,7 +797,7 @@ class MainWindow(QMainWindow):
 
     def _apply_diff_table_layout(self) -> None:
         header = self.diff_table.horizontalHeader()
-        header.setMinimumSectionSize(108)
+        header.setMinimumSectionSize(84)
         for column_index in range(self.diff_table.columnCount()):
             header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.Stretch)
         self.diff_table.horizontalScrollBar().setValue(0)
@@ -819,43 +830,49 @@ class MainWindow(QMainWindow):
         self,
         table: QTableWidget,
         columns: list[str],
+        header_labels: Optional[list[str]] = None,
     ) -> None:
         header = table.horizontalHeader()
         header.setMinimumSectionSize(56)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
         width_map = {
-            "Source File": 185,
-            "Patient ID": 90,
-            "Scanned ID": 96,
-            "Scan Date": 96,
-            "Scan Time": 84,
-            "Record #": 84,
-            "Analyed": 70,
-            "Date of Birth": 96,
-            "Age": 56,
-            "Gender": 72,
-            "Height (m)": 78,
-            "# of Pulses": 80,
-            "Pulse Height": 84,
-            "Source Path": 210,
+            "Source File": 160,
+            "Patient ID": 82,
+            "Scanned ID": 84,
+            "Scan Date": 90,
+            "Scan Time": 74,
+            "Record #": 74,
+            "Analyed": 58,
+            "Date of Birth": 84,
+            "Age": 48,
+            "Gender": 64,
+            "Height (m)": 66,
+            "# of Pulses": 62,
+            "Pulse Height": 72,
+            "Source Path": 160,
         }
 
         for column_index, column_name in enumerate(columns):
+            display_name = (
+                header_labels[column_index]
+                if header_labels is not None and column_index < len(header_labels)
+                else column_name
+            )
             width = width_map.get(column_name)
             if width is None:
                 if any(
                     token in column_name
                     for token in ["(mmHg)", "(%)", "(ms)", "(bpm)", "(m/s)"]
                 ):
-                    width = 92
+                    width = 84
                 elif "Variation" in column_name or "Pressure" in column_name:
-                    width = 98
+                    width = 88
                 else:
-                    width = min(max(table.columnWidth(column_index), 72), 120)
+                    width = min(max(table.columnWidth(column_index), 64), 110)
             width = max(
                 width,
-                header.fontMetrics().horizontalAdvance(column_name) + 28,
+                header.fontMetrics().horizontalAdvance(display_name) + 24,
             )
             table.setColumnWidth(column_index, width)
 
@@ -865,13 +882,13 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         review_banner = QFrame()
-        review_banner.setObjectName("subpanel")
+        review_banner.setObjectName("reviewBanner")
         review_banner_layout = QHBoxLayout(review_banner)
-        review_banner_layout.setContentsMargins(14, 12, 14, 12)
-        review_banner_layout.setSpacing(12)
+        review_banner_layout.setContentsMargins(14, 10, 14, 10)
+        review_banner_layout.setSpacing(10)
 
         self.review_count_badge = QLabel("0")
         self.review_count_badge.setObjectName("reviewBadge")
@@ -883,7 +900,7 @@ class MainWindow(QMainWindow):
         self.review_status_label = QLabel(
             "Patients with more than two entries will appear here after processing."
         )
-        self.review_status_label.setObjectName("summaryLabel")
+        self.review_status_label.setObjectName("helperSmall")
         self.review_status_label.setWordWrap(True)
         review_banner_layout.addWidget(self.review_status_label, 1)
         layout.addWidget(review_banner)
@@ -893,7 +910,7 @@ class MainWindow(QMainWindow):
         self.review_split = review_split
 
         patient_panel = QFrame()
-        patient_panel.setObjectName("subpanel")
+        patient_panel.setObjectName("reviewQueueCard")
         patient_panel.setMinimumWidth(220)
         patient_panel.setMaximumWidth(320)
         self.review_patient_panel = patient_panel
@@ -912,17 +929,18 @@ class MainWindow(QMainWindow):
         patient_layout.addLayout(patient_header)
         self.patient_list = QListWidget()
         self.patient_list.setAlternatingRowColors(True)
+        self.patient_list.viewport().installEventFilter(self)
         self.patient_list.currentRowChanged.connect(self._manual_patient_changed)
         patient_layout.addWidget(self.patient_list, 1)
         self.review_hint_label = QLabel(
-            "Each patient starts with the automatic pair already selected."
+            "Auto pair is preselected for each patient."
         )
         self.review_hint_label.setObjectName("helperSmall")
         self.review_hint_label.setWordWrap(True)
         patient_layout.addWidget(self.review_hint_label)
 
         detail_panel = QFrame()
-        detail_panel.setObjectName("subpanel")
+        detail_panel.setObjectName("reviewCanvas")
         self.review_detail_panel = detail_panel
         detail_panel_layout = QVBoxLayout(detail_panel)
         detail_panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -945,13 +963,13 @@ class MainWindow(QMainWindow):
 
         detail_layout = QVBoxLayout(detail_content)
         detail_layout.setContentsMargins(14, 14, 14, 14)
-        detail_layout.setSpacing(12)
+        detail_layout.setSpacing(10)
 
         patient_context_card = QFrame()
-        patient_context_card.setObjectName("subpanel")
+        patient_context_card.setObjectName("reviewContextCard")
         patient_context_layout = QVBoxLayout(patient_context_card)
         patient_context_layout.setContentsMargins(14, 12, 14, 12)
-        patient_context_layout.setSpacing(8)
+        patient_context_layout.setSpacing(6)
 
         patient_context_header = QHBoxLayout()
         patient_context_header.setSpacing(10)
@@ -993,10 +1011,10 @@ class MainWindow(QMainWindow):
         detail_layout.addLayout(action_row)
 
         pair_card = QFrame()
-        pair_card.setObjectName("subpanel")
+        pair_card.setObjectName("tableCard")
         pair_card_layout = QVBoxLayout(pair_card)
-        pair_card_layout.setContentsMargins(14, 12, 14, 14)
-        pair_card_layout.setSpacing(10)
+        pair_card_layout.setContentsMargins(14, 12, 14, 12)
+        pair_card_layout.setSpacing(8)
         pair_card_layout.addWidget(self._micro_title("Selected measurements"))
 
         self.pair_table = QTableWidget(0, 8)
@@ -1033,7 +1051,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(pair_card)
 
         diff_card = QFrame()
-        diff_card.setObjectName("subpanel")
+        diff_card.setObjectName("tableCard")
         diff_card_layout = QVBoxLayout(diff_card)
         diff_card_layout.setContentsMargins(14, 12, 14, 12)
         diff_card_layout.setSpacing(8)
@@ -1042,8 +1060,8 @@ class MainWindow(QMainWindow):
         self.diff_table = QTableWidget(1, 5)
         self.diff_table.setHorizontalHeaderLabels(
             [
-                "Peripheral SYS",
-                "Peripheral DIA",
+                "SYS",
+                "DIA",
                 "MAP",
                 "Aortic SYS",
                 "Aortic DIA",
@@ -1081,6 +1099,46 @@ class MainWindow(QMainWindow):
         layout.addWidget(review_split, 1)
 
         return tab
+
+    def _preview_header_label(self, column_name: str) -> str:
+        header_map = {
+            "Analyed": "Used",
+            "Date of Birth": "DOB",
+            "Height (m)": "Ht (m)",
+            "# of Pulses": "Pulses",
+            "Pulse Height": "Pulse Ht",
+            "Pulse Height Variation (%)": "Pulse Ht Var %",
+            "Diastolic Variation (%)": "Dia Var %",
+            "Shape Deviation (%)": "Shape Dev %",
+            "Pulse Length Variation (%)": "Pulse Len Var %",
+            "Overall Quality (%)": "Quality %",
+            "Peripheral Systolic Pressure (mmHg)": "Peripheral SYS",
+            "Peripheral Diastolic Pressure (mmHg)": "Peripheral DIA",
+            "Peripheral Pulse Pressure (mmHg)": "Peripheral PP",
+            "Peripheral Mean Pressure (mmHg)": "MAP",
+            "Aortic Systolic Pressure (mmHg)": "Aortic SYS",
+            "Aortic Diastolic Pressure (mmHg)": "Aortic DIA",
+            "Aortic Pulse Pressure (mmHg)": "Aortic PP",
+            "Heart Rate (bpm)": "HR",
+            "Pulse Pressure Amplification (%)": "PPA %",
+            "Period (ms)": "Period",
+            "Ejection Duration (ms)": "Eject Dur",
+            "Ejection Duration (%)": "Eject Dur %",
+            "Aortic T2 (ms)": "Aortic T2",
+            "P1 Height (mmHg)": "P1 Height",
+            "Aortic Augmentation (mmHg)": "Aort Aug",
+            "Aortic AIx AP/PP(%)": "AIx AP/PP",
+            "Aortic AIx P2/P1(%)": "AIx P2/P1",
+            "Aortic AIx AP/PP @ HR75 (%)": "AIx @75",
+            "Buckberg SEVR (%)": "SEVR %",
+            "PTI Systolic (mmHg.s/min)": "PTI SYS",
+            "PTI Diastolic (mmHg.s/min)": "PTI DIA",
+            "End Systolic Pressure (mmHg)": "End SYS",
+            "MAP Systolic (mmHg)": "MAP SYS",
+            "MAP Diastolic (mmHg)": "MAP DIA",
+            "Source Path": "Path",
+        }
+        return header_map.get(column_name, column_name)
 
     def _build_all_data_tab(self) -> QWidget:
         tab = QWidget()
@@ -1193,7 +1251,7 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("statCard")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(2)
 
         value_label = QLabel("0")
@@ -1216,15 +1274,32 @@ class MainWindow(QMainWindow):
                 font-size: 10pt;
             }
             QFrame#panel {
-                background: #fffdf8;
+                background: #fffdfa;
                 border: 1px solid #d8d0c3;
                 border-radius: 12px;
             }
             QFrame#subpanel,
+            QFrame#reviewQueueCard,
+            QFrame#reviewContextCard,
+            QFrame#tableCard,
+            QFrame#resultsHeaderCard,
+            QFrame#reviewBanner,
             QFrame#statCard {
-                background: #f9f6ef;
-                border: 1px solid #e3dbce;
+                background: #fcfaf5;
+                border: 1px solid #e5ddd1;
                 border-radius: 10px;
+            }
+            QFrame#reviewCanvas {
+                background: transparent;
+                border: 0;
+            }
+            QFrame#resultsHeaderCard,
+            QFrame#reviewBanner {
+                background: #f7f2e7;
+                border-color: #e2d8c7;
+            }
+            QFrame#statCard {
+                background: #f8f4ec;
             }
             QLabel#title {
                 font-size: 24pt;
@@ -1254,7 +1329,7 @@ class MainWindow(QMainWindow):
                 font-size: 20pt;
             }
             QLabel#cardValue {
-                font-size: 20pt;
+                font-size: 18pt;
                 font-weight: 700;
                 color: #0e6d69;
             }
@@ -1266,11 +1341,14 @@ class MainWindow(QMainWindow):
             QLabel#fileSummary {
                 color: #5f6d73;
             }
+            QLabel#helperSmall {
+                line-height: 1.25em;
+            }
             QLabel#fileSummary {
                 background: #f3f7f5;
                 border: 1px solid #d7e2dc;
                 border-radius: 8px;
-                padding: 8px 10px;
+                padding: 7px 10px;
             }
             QLabel#reviewBadge,
             QLabel#successPill,
@@ -1375,7 +1453,7 @@ class MainWindow(QMainWindow):
                 border: 0;
                 border-right: 1px solid #dde2df;
                 border-bottom: 1px solid #dde2df;
-                padding: 8px 10px;
+                padding: 7px 9px;
                 font-weight: 600;
             }
             QProgressBar {
@@ -1737,6 +1815,8 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 if column_index == 0:
                     item.setData(Qt.ItemDataRole.UserRole, frame_index)
+                if value:
+                    item.setToolTip(value)
                 if column_index in {2, 3, 4, 5, 6, 7, 8}:
                     item.setTextAlignment(
                         int(
@@ -1763,9 +1843,9 @@ class MainWindow(QMainWindow):
 
         if not self.bundle or not self.bundle.manual_patients:
             self.review_status_label.setText(
-                "No multi-entry patients need manual review. Automatic pairing is ready."
+                "No overrides are needed. Automatic pairing is ready."
                 if self.records
-                else "Patients with more than two entries will appear here after processing."
+                else "Patients with more than two entries appear here after processing."
             )
             self.review_count_badge.setText("0")
             self.review_queue_badge.setText("0")
@@ -1784,7 +1864,7 @@ class MainWindow(QMainWindow):
         self.review_count_badge.setText(str(patient_count))
         self.review_queue_badge.setText(str(patient_count))
         self.review_status_label.setText(
-            "Automatic pairs are preselected. Review only the patients that need changes."
+            "Auto pairs are preselected. Change only the patients you want to override."
         )
 
         selected_row = 0
@@ -1868,6 +1948,7 @@ class MainWindow(QMainWindow):
                 else "Selected files: none selected yet"
             )
             self.review_warning_label.setText("")
+        self.selected_files_label.setToolTip("\n".join(selected_files) if selected_files else "")
         self.review_selection_badge.style().unpolish(self.review_selection_badge)
         self.review_selection_badge.style().polish(self.review_selection_badge)
 
@@ -1897,6 +1978,8 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 if column_offset == 6:
                     item.setData(Qt.ItemDataRole.UserRole, frame_index)
+                if value:
+                    item.setToolTip(value)
                 if column_offset != 6:
                     item.setTextAlignment(
                         int(
@@ -2105,20 +2188,29 @@ class MainWindow(QMainWindow):
         columns: list[str],
         index_role_column: Optional[int] = None,
     ) -> None:
+        header_labels = [self._preview_header_label(column_name) for column_name in columns]
         table.setColumnCount(len(columns))
-        table.setHorizontalHeaderLabels(columns)
+        table.setHorizontalHeaderLabels(header_labels)
         table.setRowCount(len(frame))
+
+        for column_index, column_name in enumerate(columns):
+            header_item = table.horizontalHeaderItem(column_index)
+            if header_item is not None:
+                header_item.setToolTip(column_name)
 
         for table_row, (frame_index, row) in enumerate(frame.iterrows()):
             for column_index, column_name in enumerate(columns):
-                item = QTableWidgetItem(format_value(row.get(column_name)))
+                value = format_value(row.get(column_name))
+                item = QTableWidgetItem(value)
                 if index_role_column is not None and column_index == index_role_column:
                     item.setData(Qt.ItemDataRole.UserRole, frame_index)
+                if value:
+                    item.setToolTip(value)
                 if column_name == "Analyed" and row.get(column_name) == "Yes":
                     item.setBackground(QColor("#dff1ea"))
                 table.setItem(table_row, column_index, item)
 
-        self._apply_data_table_widths(table, columns)
+        self._apply_data_table_widths(table, columns, header_labels)
         if table.rowCount() > 0:
             table.selectRow(0)
 
