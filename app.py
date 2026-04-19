@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from PySide6.QtCore import QObject, QPointF, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -297,6 +299,12 @@ class MainWindow(QMainWindow):
         self.pair_alert_threshold = 5.0
         self.diff_green_max = 3.0
         self.diff_yellow_max = 6.0
+        self.setup_scroll_area: Optional[QScrollArea] = None
+        self.review_split: Optional[QSplitter] = None
+        self.review_patient_panel: Optional[QFrame] = None
+        self.review_detail_panel: Optional[QFrame] = None
+        self.review_detail_scroll: Optional[QScrollArea] = None
+        self.review_split_compact: Optional[bool] = None
 
         self.setWindowTitle(APP_TITLE)
         self.resize(1400, 900)
@@ -320,7 +328,9 @@ class MainWindow(QMainWindow):
         workflow.setChildrenCollapsible(False)
         workflow.addWidget(self._build_setup_panel())
         workflow.addWidget(self._build_results_panel())
-        workflow.setSizes([380, 980])
+        workflow.setStretchFactor(0, 0)
+        workflow.setStretchFactor(1, 1)
+        workflow.setSizes([360, 1200])
         root_layout.addWidget(workflow, 1)
 
         self.setCentralWidget(root)
@@ -352,13 +362,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(subtitle)
         return container
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_review_split_layout()
+
     def _build_setup_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setMinimumWidth(340)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(16)
+        panel.setMinimumWidth(360)
+        panel.setMaximumWidth(460)
+        outer_layout = QVBoxLayout(panel)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setup_scroll_area = scroll
+        outer_layout.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         layout.addWidget(
             self._section_title(
@@ -369,10 +398,14 @@ class MainWindow(QMainWindow):
 
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.file_list.setMinimumHeight(180)
+        self.file_list.setMinimumHeight(110)
+        self.file_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.file_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.file_list.viewport().installEventFilter(self)
         layout.addWidget(self.file_list, 1)
 
         file_buttons = QHBoxLayout()
+        file_buttons.setSpacing(8)
         self.add_files_button = QPushButton("Add PDFs")
         self.remove_files_button = QPushButton("Remove selected")
         self.clear_files_button = QPushButton("Clear")
@@ -389,8 +422,10 @@ class MainWindow(QMainWindow):
         )
 
         output_row = QHBoxLayout()
+        output_row.setSpacing(8)
         self.output_line = QLineEdit(str(self.output_path))
         self.output_line.setPlaceholderText("Choose an .xlsx output file")
+        self.output_line.setCursorPosition(0)
         self.browse_output_button = QPushButton("Browse")
         output_row.addWidget(self.output_line, 1)
         output_row.addWidget(self.browse_output_button)
@@ -399,7 +434,7 @@ class MainWindow(QMainWindow):
         settings_header = QWidget()
         settings_header_layout = QHBoxLayout(settings_header)
         settings_header_layout.setContentsMargins(0, 0, 0, 0)
-        settings_header_layout.setSpacing(8)
+        settings_header_layout.setSpacing(6)
         settings_header_layout.addWidget(
             self._section_title(
                 "3. Settings",
@@ -419,32 +454,53 @@ class MainWindow(QMainWindow):
         layout.addWidget(settings_header)
 
         settings_grid = QGridLayout()
-        settings_grid.setHorizontalSpacing(10)
-        settings_grid.setVerticalSpacing(8)
+        settings_grid.setHorizontalSpacing(8)
+        settings_grid.setVerticalSpacing(6)
+        settings_grid.setColumnStretch(0, 1)
+        settings_grid.setColumnStretch(1, 1)
 
         self.green_max_spin = QDoubleSpinBox()
         self.green_max_spin.setRange(0, 100)
         self.green_max_spin.setDecimals(1)
         self.green_max_spin.setValue(self.diff_green_max)
         self.green_max_spin.setSuffix(" mmHg")
+        self.green_max_spin.setMinimumWidth(160)
+        self.green_max_spin.setMinimumHeight(36)
+        self.green_max_spin.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.green_max_spin.installEventFilter(self)
 
         self.yellow_max_spin = QDoubleSpinBox()
         self.yellow_max_spin.setRange(0, 100)
         self.yellow_max_spin.setDecimals(1)
         self.yellow_max_spin.setValue(self.diff_yellow_max)
         self.yellow_max_spin.setSuffix(" mmHg")
+        self.yellow_max_spin.setMinimumWidth(160)
+        self.yellow_max_spin.setMinimumHeight(36)
+        self.yellow_max_spin.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.yellow_max_spin.installEventFilter(self)
 
         self.pair_alert_spin = QDoubleSpinBox()
         self.pair_alert_spin.setRange(0, 100)
         self.pair_alert_spin.setDecimals(1)
         self.pair_alert_spin.setValue(self.pair_alert_threshold)
         self.pair_alert_spin.setSuffix(" mmHg")
+        self.pair_alert_spin.setMinimumWidth(160)
+        self.pair_alert_spin.setMinimumHeight(36)
+        self.pair_alert_spin.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.pair_alert_spin.installEventFilter(self)
 
-        settings_grid.addWidget(QLabel("Green up to"), 0, 0)
+        green_label = QLabel("Green up to")
+        green_label.setMinimumHeight(28)
+        yellow_label = QLabel("Yellow up to")
+        yellow_label.setMinimumHeight(28)
+        alert_label = QLabel("Pair alert above")
+        alert_label.setMinimumHeight(28)
+
+        settings_grid.addWidget(green_label, 0, 0)
         settings_grid.addWidget(self.green_max_spin, 0, 1)
-        settings_grid.addWidget(QLabel("Yellow up to"), 1, 0)
+        settings_grid.addWidget(yellow_label, 1, 0)
         settings_grid.addWidget(self.yellow_max_spin, 1, 1)
-        settings_grid.addWidget(QLabel("Pair alert above"), 2, 0)
+        settings_grid.addWidget(alert_label, 2, 0)
         settings_grid.addWidget(self.pair_alert_spin, 2, 1)
         layout.addLayout(settings_grid)
 
@@ -468,8 +524,6 @@ class MainWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        layout.addStretch(1)
-
         self.add_files_button.clicked.connect(self.add_pdf_files)
         self.remove_files_button.clicked.connect(self.remove_selected_files)
         self.clear_files_button.clicked.connect(self.clear_pdf_files)
@@ -490,21 +544,39 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        heading_row = QHBoxLayout()
-        heading_row.addWidget(
-            self._section_title(
-                "5. Review and export",
-                "Automatic pairing is applied by default. Adjust only the patients that need manual selection.",
-            ),
-            1,
+        header_card = QFrame()
+        header_card.setObjectName("subpanel")
+        header_layout = QHBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setSpacing(14)
+
+        header_copy = QWidget()
+        header_copy_layout = QVBoxLayout(header_copy)
+        header_copy_layout.setContentsMargins(0, 0, 0, 0)
+        header_copy_layout.setSpacing(4)
+
+        header_title = QLabel("5. Review and export")
+        header_title.setObjectName("sectionTitle")
+        header_subtitle = QLabel(
+            "Automatic pairing is applied by default. Adjust only the patients that need manual selection."
         )
+        header_subtitle.setObjectName("statusLabel")
+        header_subtitle.setWordWrap(True)
+        header_copy_layout.addWidget(header_title)
+        header_copy_layout.addWidget(header_subtitle)
+        header_layout.addWidget(header_copy, 1)
+
+        header_actions = QHBoxLayout()
+        header_actions.setSpacing(10)
         self.export_button = QPushButton("Export Excel")
         self.export_button.setObjectName("primaryButton")
         self.open_output_button = QPushButton("Open folder")
         self.open_output_button.setEnabled(False)
-        heading_row.addWidget(self.export_button)
-        heading_row.addWidget(self.open_output_button)
-        layout.addLayout(heading_row)
+        header_actions.addWidget(self.export_button)
+        header_actions.addWidget(self.open_output_button)
+        header_layout.addLayout(header_actions)
+
+        layout.addWidget(header_card)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_overview_tab(), "Overview")
@@ -517,6 +589,89 @@ class MainWindow(QMainWindow):
         self.open_output_button.clicked.connect(self.open_export_folder)
 
         return panel
+
+    def eventFilter(self, source: QObject, event: object) -> bool:
+        if (
+            event is not None
+            and isinstance(event, QEvent)
+            and event.type() == QEvent.Type.Wheel
+        ):
+            table_viewports = {
+                self.overview_table.viewport(),
+                self.pair_table.viewport(),
+                self.diff_table.viewport(),
+                self.all_data_table.viewport(),
+                self.averaged_table.viewport(),
+            }
+            if (
+                event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                and source
+                in table_viewports
+            ):
+                table = source.parent()
+                if isinstance(table, QTableWidget):
+                    scrollbar = table.horizontalScrollBar()
+                    delta = event.angleDelta().y() or event.angleDelta().x()
+                    steps = delta / 120
+                    scroll_step = 1 if steps > 0 else -1 if steps < 0 else 0
+                    scrollbar.setValue(scrollbar.value() - scroll_step)
+                    return True
+            elif source in table_viewports:
+                if (
+                    source in {self.pair_table.viewport(), self.diff_table.viewport()}
+                    and self.review_detail_scroll is not None
+                ):
+                    scrollbar = self.review_detail_scroll.verticalScrollBar()
+                    delta = event.angleDelta().y()
+                    steps = delta / 120
+                    base_step = max(1, scrollbar.singleStep())
+                    scroll_amount = max(1, int(round(abs(steps) * base_step)))
+                    if steps > 0:
+                        scrollbar.setValue(scrollbar.value() - scroll_amount)
+                    elif steps < 0:
+                        scrollbar.setValue(scrollbar.value() + scroll_amount)
+                    return True
+                else:
+                    table = source.parent()
+                    if not isinstance(table, QTableWidget):
+                        table = None
+                    scrollbar = table.verticalScrollBar() if table is not None else None
+
+                if scrollbar is not None:
+                    delta = event.angleDelta().y()
+                    steps = delta / 120
+                    base_step = max(1, scrollbar.singleStep())
+                    scroll_amount = max(1, int(round(abs(steps) * base_step * 3 / 25)))
+                    if steps > 0:
+                        scrollbar.setValue(scrollbar.value() - scroll_amount)
+                    elif steps < 0:
+                        scrollbar.setValue(scrollbar.value() + scroll_amount)
+                    return True
+
+        if (
+            event is not None
+            and isinstance(event, QEvent)
+            and event.type() == QEvent.Type.Wheel
+            and self.setup_scroll_area is not None
+        ):
+            focus_widget = QApplication.focusWidget()
+            should_redirect = False
+
+            if source is self.file_list.viewport():
+                should_redirect = focus_widget is not self.file_list
+            elif source in {
+                self.green_max_spin,
+                self.yellow_max_spin,
+                self.pair_alert_spin,
+            }:
+                should_redirect = focus_widget is not source
+
+            if should_redirect:
+                scrollbar = self.setup_scroll_area.verticalScrollBar()
+                scrollbar.setValue(scrollbar.value() - event.angleDelta().y())
+                return True
+
+        return super().eventFilter(source, event)
 
     def _build_overview_tab(self) -> QWidget:
         tab = QWidget()
@@ -547,7 +702,7 @@ class MainWindow(QMainWindow):
             [
                 "Source File",
                 "Patient ID",
-                "Recording #",
+                "Record #",
                 "Scan Date",
                 "Scan Time",
                 "SYS",
@@ -557,15 +712,7 @@ class MainWindow(QMainWindow):
                 "Status",
             ]
         )
-        header = self.overview_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
-        self.overview_table.setColumnWidth(1, 112)
-        self.overview_table.setColumnWidth(5, 56)
-        self.overview_table.setColumnWidth(6, 56)
-        self.overview_table.setColumnWidth(7, 64)
+        self._apply_overview_column_widths()
         self.overview_table.verticalHeader().setVisible(False)
         self.overview_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -574,6 +721,9 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.overview_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.overview_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.overview_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.overview_table.viewport().installEventFilter(self)
         self.overview_table.itemDoubleClicked.connect(self.open_selected_overview_pdf)
         self.overview_table.itemSelectionChanged.connect(self._sync_controls)
         layout.addWidget(self.overview_table, 1)
@@ -589,77 +739,281 @@ class MainWindow(QMainWindow):
         )
         return tab
 
+    def _apply_overview_column_widths(self) -> None:
+        header = self.overview_table.horizontalHeader()
+        header.setMinimumSectionSize(54)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        self.overview_table.setColumnWidth(0, 136)
+        self.overview_table.setColumnWidth(1, 96)
+        self.overview_table.setColumnWidth(2, 86)
+        self.overview_table.setColumnWidth(3, 96)
+        self.overview_table.setColumnWidth(4, 86)
+        self.overview_table.setColumnWidth(5, 58)
+        self.overview_table.setColumnWidth(6, 58)
+        self.overview_table.setColumnWidth(7, 64)
+        self.overview_table.setColumnWidth(8, 80)
+        self.overview_table.setColumnWidth(9, 150)
+        self.overview_table.horizontalScrollBar().setValue(0)
+
+    def _apply_pair_table_layout(self) -> None:
+        header = self.pair_table.horizontalHeader()
+        header.setMinimumSectionSize(54)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        header.setStretchLastSection(False)
+        self.pair_table.setColumnWidth(0, 72)
+        self.pair_table.setColumnWidth(1, 78)
+        self.pair_table.setColumnWidth(2, 78)
+        self.pair_table.setColumnWidth(3, 68)
+        self.pair_table.setColumnWidth(4, 96)
+        self.pair_table.setColumnWidth(5, 96)
+        self.pair_table.setColumnWidth(6, 320)
+        self.pair_table.setColumnWidth(7, 118)
+        self.pair_table.horizontalScrollBar().setValue(0)
+
+    def _update_pair_table_height(self) -> None:
+        header_height = self.pair_table.horizontalHeader().height()
+        row_height = self.pair_table.verticalHeader().defaultSectionSize()
+        frame = self.pair_table.frameWidth() * 2
+        scrollbar_height = self.pair_table.horizontalScrollBar().sizeHint().height()
+        row_count = max(self.pair_table.rowCount(), 1)
+        total_height = header_height + (row_count * row_height) + frame + scrollbar_height + 4
+        self.pair_table.setFixedHeight(total_height)
+        self.pair_table.verticalScrollBar().setValue(0)
+
+    def _apply_diff_table_layout(self) -> None:
+        header = self.diff_table.horizontalHeader()
+        header.setMinimumSectionSize(108)
+        for column_index in range(self.diff_table.columnCount()):
+            header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.Stretch)
+        self.diff_table.horizontalScrollBar().setValue(0)
+        header_height = self.diff_table.horizontalHeader().height()
+        row_height = self.diff_table.verticalHeader().defaultSectionSize()
+        frame = self.diff_table.frameWidth() * 2
+        total_height = header_height + row_height + frame + 2
+        self.diff_table.setFixedHeight(total_height)
+        self.diff_table.verticalScrollBar().setValue(0)
+
+    def _update_review_split_layout(self) -> None:
+        if (
+            self.review_split is None
+            or self.review_patient_panel is None
+            or self.review_detail_panel is None
+        ):
+            return
+
+        if self.review_split.orientation() != Qt.Orientation.Horizontal:
+            self.review_split.setOrientation(Qt.Orientation.Horizontal)
+            self.review_split.setSizes([220, 760])
+
+        self.review_patient_panel.setMinimumWidth(220)
+        self.review_patient_panel.setMaximumWidth(320)
+        self.review_patient_panel.setMinimumHeight(0)
+        self.review_patient_panel.setMaximumHeight(16777215)
+        self.review_split_compact = False
+
+    def _apply_data_table_widths(
+        self,
+        table: QTableWidget,
+        columns: list[str],
+    ) -> None:
+        header = table.horizontalHeader()
+        header.setMinimumSectionSize(56)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+
+        width_map = {
+            "Source File": 185,
+            "Patient ID": 90,
+            "Scanned ID": 96,
+            "Scan Date": 96,
+            "Scan Time": 84,
+            "Record #": 84,
+            "Analyed": 70,
+            "Date of Birth": 96,
+            "Age": 56,
+            "Gender": 72,
+            "Height (m)": 78,
+            "# of Pulses": 80,
+            "Pulse Height": 84,
+            "Source Path": 210,
+        }
+
+        for column_index, column_name in enumerate(columns):
+            width = width_map.get(column_name)
+            if width is None:
+                if any(
+                    token in column_name
+                    for token in ["(mmHg)", "(%)", "(ms)", "(bpm)", "(m/s)"]
+                ):
+                    width = 92
+                elif "Variation" in column_name or "Pressure" in column_name:
+                    width = 98
+                else:
+                    width = min(max(table.columnWidth(column_index), 72), 120)
+            width = max(
+                width,
+                header.fontMetrics().horizontalAdvance(column_name) + 28,
+            )
+            table.setColumnWidth(column_index, width)
+
+        table.horizontalScrollBar().setValue(0)
+
     def _build_review_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
+        review_banner = QFrame()
+        review_banner.setObjectName("subpanel")
+        review_banner_layout = QHBoxLayout(review_banner)
+        review_banner_layout.setContentsMargins(14, 12, 14, 12)
+        review_banner_layout.setSpacing(12)
+
+        self.review_count_badge = QLabel("0")
+        self.review_count_badge.setObjectName("reviewBadge")
+        self.review_count_badge.setAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        review_banner_layout.addWidget(self.review_count_badge, 0)
+
         self.review_status_label = QLabel(
             "Patients with more than two entries will appear here after processing."
         )
         self.review_status_label.setObjectName("summaryLabel")
         self.review_status_label.setWordWrap(True)
-        layout.addWidget(self.review_status_label)
+        review_banner_layout.addWidget(self.review_status_label, 1)
+        layout.addWidget(review_banner)
 
         review_split = QSplitter(Qt.Orientation.Horizontal)
         review_split.setChildrenCollapsible(False)
+        self.review_split = review_split
 
         patient_panel = QFrame()
         patient_panel.setObjectName("subpanel")
+        patient_panel.setMinimumWidth(220)
+        patient_panel.setMaximumWidth(320)
+        self.review_patient_panel = patient_panel
         patient_layout = QVBoxLayout(patient_panel)
         patient_layout.setContentsMargins(14, 14, 14, 14)
         patient_layout.setSpacing(10)
-        patient_layout.addWidget(self._micro_title("Patients needing review"))
+        patient_header = QHBoxLayout()
+        patient_header.setSpacing(8)
+        patient_header.addWidget(self._micro_title("Review queue"), 1)
+        self.review_queue_badge = QLabel("0")
+        self.review_queue_badge.setObjectName("reviewBadge")
+        self.review_queue_badge.setAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        patient_header.addWidget(self.review_queue_badge, 0)
+        patient_layout.addLayout(patient_header)
         self.patient_list = QListWidget()
+        self.patient_list.setAlternatingRowColors(True)
         self.patient_list.currentRowChanged.connect(self._manual_patient_changed)
         patient_layout.addWidget(self.patient_list, 1)
         self.review_hint_label = QLabel(
             "Each patient starts with the automatic pair already selected."
         )
-        self.review_hint_label.setObjectName("statusLabel")
+        self.review_hint_label.setObjectName("helperSmall")
         self.review_hint_label.setWordWrap(True)
         patient_layout.addWidget(self.review_hint_label)
 
         detail_panel = QFrame()
         detail_panel.setObjectName("subpanel")
-        detail_layout = QVBoxLayout(detail_panel)
+        self.review_detail_panel = detail_panel
+        detail_panel_layout = QVBoxLayout(detail_panel)
+        detail_panel_layout.setContentsMargins(0, 0, 0, 0)
+        detail_panel_layout.setSpacing(0)
+
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        detail_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        detail_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
+        self.review_detail_scroll = detail_scroll
+        detail_panel_layout.addWidget(detail_scroll)
+
+        detail_content = QWidget()
+        detail_scroll.setWidget(detail_content)
+
+        detail_layout = QVBoxLayout(detail_content)
         detail_layout.setContentsMargins(14, 14, 14, 14)
-        detail_layout.setSpacing(10)
+        detail_layout.setSpacing(12)
+
+        patient_context_card = QFrame()
+        patient_context_card.setObjectName("subpanel")
+        patient_context_layout = QVBoxLayout(patient_context_card)
+        patient_context_layout.setContentsMargins(14, 12, 14, 12)
+        patient_context_layout.setSpacing(8)
+
+        patient_context_header = QHBoxLayout()
+        patient_context_header.setSpacing(10)
         self.current_patient_label = QLabel("No patient selected")
-        self.current_patient_label.setObjectName("summaryLabel")
+        self.current_patient_label.setObjectName("reviewPatientTitle")
         self.current_patient_label.setWordWrap(True)
+        patient_context_header.addWidget(self.current_patient_label, 1)
+        self.review_selection_badge = QLabel("")
+        self.review_selection_badge.setObjectName("neutralPill")
+        self.review_selection_badge.setAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        patient_context_header.addWidget(self.review_selection_badge, 0)
+
         self.selection_label = QLabel("")
-        self.selection_label.setObjectName("statusLabel")
+        self.selection_label.setObjectName("helperSmall")
         self.selection_label.setWordWrap(True)
+        self.selected_files_label = QLabel("")
+        self.selected_files_label.setObjectName("fileSummary")
+        self.selected_files_label.setWordWrap(True)
         self.review_warning_label = QLabel("")
         self.review_warning_label.setObjectName("warningLabel")
         self.review_warning_label.setWordWrap(True)
-        detail_layout.addWidget(self.current_patient_label)
-        detail_layout.addWidget(self.selection_label)
-        detail_layout.addWidget(self.review_warning_label)
+        self.review_warning_label.hide()
+        patient_context_layout.addLayout(patient_context_header)
+        patient_context_layout.addWidget(self.selection_label)
+        patient_context_layout.addWidget(self.selected_files_label)
+        detail_layout.addWidget(patient_context_card)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        self.reset_auto_button = QPushButton("Reset to auto pair")
+        self.view_pair_pdf_button = QPushButton("View selected PDF")
+        self.reset_auto_button.setMinimumWidth(190)
+        self.view_pair_pdf_button.setMinimumWidth(190)
+        action_row.addWidget(self.reset_auto_button)
+        action_row.addWidget(self.view_pair_pdf_button)
+        action_row.addStretch(1)
+        detail_layout.addLayout(action_row)
+
+        pair_card = QFrame()
+        pair_card.setObjectName("subpanel")
+        pair_card_layout = QVBoxLayout(pair_card)
+        pair_card_layout.setContentsMargins(14, 12, 14, 14)
+        pair_card_layout.setSpacing(10)
+        pair_card_layout.addWidget(self._micro_title("Selected measurements"))
 
         self.pair_table = QTableWidget(0, 8)
         self.pair_table.setHorizontalHeaderLabels(
             [
                 "Keep",
-                "Source File",
-                "Peripheral SYS",
-                "Peripheral DIA",
+                "SYS",
+                "DIA",
                 "MAP",
                 "Aortic SYS",
                 "Aortic DIA",
-                "Auto pair",
+                "Source File",
+                "Pair method",
             ]
         )
         header = self.pair_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for column_index in range(2, 8):
-            header.setSectionResizeMode(
-                column_index,
-                QHeaderView.ResizeMode.ResizeToContents,
-            )
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.pair_table.verticalHeader().setVisible(False)
         self.pair_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -668,17 +1022,22 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.pair_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.pair_table.setWordWrap(False)
+        self.pair_table.verticalHeader().setDefaultSectionSize(34)
+        self.pair_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pair_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.pair_table.viewport().installEventFilter(self)
         self.pair_table.itemDoubleClicked.connect(self.open_selected_pair_pdf)
         self.pair_table.itemSelectionChanged.connect(self._sync_controls)
-        detail_layout.addWidget(self.pair_table, 1)
+        pair_card_layout.addWidget(self.pair_table)
+        detail_layout.addWidget(pair_card)
 
-        review_buttons = QHBoxLayout()
-        self.reset_auto_button = QPushButton("Reset to auto pair")
-        self.view_pair_pdf_button = QPushButton("View selected PDF")
-        review_buttons.addWidget(self.reset_auto_button)
-        review_buttons.addWidget(self.view_pair_pdf_button)
-        review_buttons.addStretch(1)
-        detail_layout.addLayout(review_buttons)
+        diff_card = QFrame()
+        diff_card.setObjectName("subpanel")
+        diff_card_layout = QVBoxLayout(diff_card)
+        diff_card_layout.setContentsMargins(14, 12, 14, 12)
+        diff_card_layout.setSpacing(8)
+        diff_card_layout.addWidget(self._micro_title("Selected pair absolute differences"))
 
         self.diff_table = QTableWidget(1, 5)
         self.diff_table.setHorizontalHeaderLabels(
@@ -695,26 +1054,30 @@ class MainWindow(QMainWindow):
         self.diff_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.diff_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.diff_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.diff_table.setFixedHeight(84)
-        diff_header = self.diff_table.horizontalHeader()
-        for column_index in range(5):
-            diff_header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.Stretch)
-        detail_layout.addWidget(self._micro_title("Selected pair absolute differences"))
-        detail_layout.addWidget(self.diff_table)
+        self.diff_table.setFixedHeight(92)
+        self.diff_table.verticalHeader().setDefaultSectionSize(34)
+        self.diff_table.viewport().installEventFilter(self)
+        self._apply_diff_table_layout()
+        diff_card_layout.addWidget(self.diff_table)
 
         self.diff_status_label = QLabel(
             "Select exactly two rows to see pair differences."
         )
-        self.diff_status_label.setObjectName("statusLabel")
+        self.diff_status_label.setObjectName("helperSmall")
         self.diff_status_label.setWordWrap(True)
-        detail_layout.addWidget(self.diff_status_label)
+        diff_card_layout.addWidget(self.diff_status_label)
+        detail_layout.addWidget(diff_card)
 
         self.reset_auto_button.clicked.connect(self.reset_current_patient_to_auto)
         self.view_pair_pdf_button.clicked.connect(self.open_selected_pair_pdf)
 
         review_split.addWidget(patient_panel)
         review_split.addWidget(detail_panel)
-        review_split.setSizes([260, 700])
+        review_split.setStretchFactor(0, 0)
+        review_split.setStretchFactor(1, 1)
+        review_split.setSizes([220, 760])
+        self._update_review_split_layout()
+        self._apply_pair_table_layout()
         layout.addWidget(review_split, 1)
 
         return tab
@@ -750,6 +1113,9 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.all_data_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.all_data_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.all_data_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.all_data_table.viewport().installEventFilter(self)
         self.all_data_table.itemDoubleClicked.connect(self.open_selected_all_data_pdf)
         self.all_data_table.itemSelectionChanged.connect(self._sync_controls)
         layout.addWidget(self.all_data_table, 1)
@@ -784,21 +1150,35 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.averaged_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.averaged_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.averaged_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.averaged_table.viewport().installEventFilter(self)
         layout.addWidget(self.averaged_table, 1)
 
         return tab
 
     def _section_title(self, title: str, description: str) -> QWidget:
         container = QWidget()
+        container.setMinimumHeight(64)
+        container.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
+        )
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
+        title_label.setMinimumHeight(22)
         description_label = QLabel(description)
         description_label.setObjectName("sectionDescription")
         description_label.setWordWrap(True)
+        description_label.setMinimumHeight(32)
+        description_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
+        )
 
         layout.addWidget(title_label)
         layout.addWidget(description_label)
@@ -860,10 +1240,15 @@ class MainWindow(QMainWindow):
             }
             QLabel#sectionTitle,
             QLabel#summaryLabel,
-            QLabel#dialogTitle {
+            QLabel#dialogTitle,
+            QLabel#reviewPatientTitle {
                 font-size: 11pt;
                 font-weight: 650;
                 color: #17313a;
+            }
+            QLabel#reviewPatientTitle {
+                font-size: 14pt;
+                font-weight: 700;
             }
             QLabel#dialogTitle {
                 font-size: 20pt;
@@ -876,6 +1261,40 @@ class MainWindow(QMainWindow):
             QLabel#warningLabel {
                 color: #9a4d00;
                 font-weight: 600;
+            }
+            QLabel#helperSmall,
+            QLabel#fileSummary {
+                color: #5f6d73;
+            }
+            QLabel#fileSummary {
+                background: #f3f7f5;
+                border: 1px solid #d7e2dc;
+                border-radius: 8px;
+                padding: 8px 10px;
+            }
+            QLabel#reviewBadge,
+            QLabel#successPill,
+            QLabel#neutralPill {
+                font-weight: 650;
+                border-radius: 10px;
+                padding: 4px 10px;
+                min-height: 20px;
+            }
+            QLabel#reviewBadge {
+                background: #e7efe9;
+                color: #0e6d69;
+                border: 1px solid #bad0c7;
+                min-width: 26px;
+            }
+            QLabel#successPill {
+                background: #dff1ea;
+                color: #0e6d69;
+                border: 1px solid #badfd1;
+            }
+            QLabel#neutralPill {
+                background: #efe9dc;
+                color: #6a5635;
+                border: 1px solid #ddd1bc;
             }
             QLabel#banner {
                 background: #ebe5d8;
@@ -931,6 +1350,15 @@ class MainWindow(QMainWindow):
                 selection-background-color: #cde7e0;
                 selection-color: #17313a;
             }
+            QListWidget::item {
+                padding: 8px 10px;
+                border-radius: 6px;
+                margin: 2px 0;
+            }
+            QListWidget::item:selected {
+                background: #dff1ea;
+                color: #17313a;
+            }
             QLineEdit {
                 padding: 8px;
             }
@@ -984,26 +1412,49 @@ class MainWindow(QMainWindow):
         self.readme_dialog.exec()
 
     def show_thresholds_help_dialog(self) -> None:
-        QMessageBox.information(
-            self,
-            "Threshold settings",
-            (
-                "These settings control how the difference row is highlighted "
-                "during multi-entry review.\n\n"
-                "Green up to\n"
-                "Differences at or below this value are shown in green.\n"
-                "Use this range for pairs that look closely matched.\n\n"
-                "Yellow up to\n"
-                "Differences above the green range and up to this value are shown in yellow.\n"
-                "Use this range for pairs that may still be acceptable, but should be looked at more carefully.\n\n"
-                "Pair alert above\n"
-                "If the selected pair differs by more than this value in peripheral systolic or peripheral diastolic pressure, "
-                "the pair is flagged as an alert in the review tab and the overview tab.\n\n"
-                "Notes\n"
-                "Differences above the yellow range are shown in red.\n"
-                "Changing these settings updates the review colors and alert rules for the current session."
-            ),
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Threshold settings")
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setTextFormat(Qt.TextFormat.RichText)
+        dialog.setText(
+            """
+            <div style="min-width: 460px; line-height: 1.45;">
+              <p style="margin: 0 0 14px 0;">
+                These settings control how the difference row is highlighted during
+                multi-entry review.
+              </p>
+              <p style="margin: 0 0 4px 0;"><b>Green up to</b></p>
+              <p style="margin: 0 0 14px 0;">
+                Differences at or below this value are shown in green.<br>
+                Use this range for pairs that look closely matched.
+              </p>
+              <p style="margin: 0 0 4px 0;"><b>Yellow up to</b></p>
+              <p style="margin: 0 0 14px 0;">
+                Differences above the green range and up to this value are shown in yellow.<br>
+                Use this range for pairs that may still be acceptable, but should be looked at more carefully.
+              </p>
+              <p style="margin: 0 0 4px 0;"><b>Pair alert above</b></p>
+              <p style="margin: 0 0 14px 0;">
+                If the selected pair differs by more than this value in peripheral systolic
+                or peripheral diastolic pressure, the pair is flagged in the review tab and
+                the overview tab.
+              </p>
+              <p style="margin: 0 0 4px 0;"><b>Notes</b></p>
+              <table style="margin: 0; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 0 8px 6px 0; vertical-align: top;">&bull;</td>
+                  <td style="padding: 0 0 6px 0;">Differences above the yellow range are shown in red.</td>
+                </tr>
+                <tr>
+                  <td style="padding: 0 8px 0 0; vertical-align: top;">&bull;</td>
+                  <td style="padding: 0;">Changing these settings updates the review colors and alert rules for the current session.</td>
+                </tr>
+              </table>
+            </div>
+            """
         )
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
 
     def add_pdf_files(self) -> None:
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -1074,6 +1525,7 @@ class MainWindow(QMainWindow):
 
     def _output_path_changed(self, value: str) -> None:
         self.output_path = Path(value.strip()) if value.strip() else Path()
+        self.output_line.setCursorPosition(0)
         self._sync_controls()
 
     def process_files(self) -> None:
@@ -1265,7 +1717,7 @@ class MainWindow(QMainWindow):
             values = [
                 format_value(row.get("Source File")),
                 format_value(row.get("Patient ID")),
-                format_value(row.get("Recording #")),
+                format_value(row.get("Record #")),
                 format_value(row.get("Scan Date")),
                 format_value(row.get("Scan Time")),
                 format_value(row.get("Peripheral Systolic Pressure (mmHg)"))
@@ -1285,6 +1737,13 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 if column_index == 0:
                     item.setData(Qt.ItemDataRole.UserRole, frame_index)
+                if column_index in {2, 3, 4, 5, 6, 7, 8}:
+                    item.setTextAlignment(
+                        int(
+                            Qt.AlignmentFlag.AlignCenter
+                            | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    )
                 if status.startswith("Pair alert"):
                     item.setBackground(QColor("#f6d7d4"))
                 elif status == "Single entry":
@@ -1293,10 +1752,10 @@ class MainWindow(QMainWindow):
                     item.setBackground(QColor("#dff1ea"))
                 self.overview_table.setItem(table_row, column_index, item)
 
-        self.overview_table.resizeColumnsToContents()
-        self.overview_table.setColumnWidth(1, 112)
+        self._apply_overview_column_widths()
         if self.overview_table.rowCount() > 0:
             self.overview_table.selectRow(0)
+            self.overview_table.horizontalScrollBar().setValue(0)
 
     def _refresh_review_panel(self, preserve_patient_id: Optional[str] = None) -> None:
         self.patient_list.blockSignals(True)
@@ -1308,8 +1767,12 @@ class MainWindow(QMainWindow):
                 if self.records
                 else "Patients with more than two entries will appear here after processing."
             )
+            self.review_count_badge.setText("0")
+            self.review_queue_badge.setText("0")
             self.current_patient_label.setText("No patient selected")
             self.selection_label.setText("")
+            self.selected_files_label.setText("")
+            self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
@@ -1317,9 +1780,11 @@ class MainWindow(QMainWindow):
             return
 
         current_patient = preserve_patient_id or self.current_manual_patient_id()
+        patient_count = len(self.bundle.manual_patients)
+        self.review_count_badge.setText(str(patient_count))
+        self.review_queue_badge.setText(str(patient_count))
         self.review_status_label.setText(
-            f"{len(self.bundle.manual_patients)} patient(s) have more than two entries. "
-            "Automatic pairs are preselected and can be adjusted here."
+            "Automatic pairs are preselected. Review only the patients that need changes."
         )
 
         selected_row = 0
@@ -1342,23 +1807,32 @@ class MainWindow(QMainWindow):
             return None
         return item.data(Qt.ItemDataRole.UserRole)
 
-    def _manual_patient_changed(self, _row: int) -> None:
-        self._render_current_patient()
+    def _manual_patient_changed(self, row: int) -> None:
+        patient_id = None
+        if row >= 0:
+            item = self.patient_list.item(row)
+            if item is not None:
+                patient_id = item.data(Qt.ItemDataRole.UserRole)
+        self._render_current_patient(patient_id_override=patient_id)
         self._sync_controls()
 
-    def _render_current_patient(self) -> None:
+    def _render_current_patient(self, patient_id_override: Optional[str] = None) -> None:
         if not self.bundle:
             self.current_patient_label.setText("No patient selected")
             self.selection_label.setText("")
+            self.selected_files_label.setText("")
+            self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
             return
 
-        patient_id = self.current_manual_patient_id()
+        patient_id = patient_id_override or self.current_manual_patient_id()
         if not patient_id:
             self.current_patient_label.setText("No patient selected")
             self.selection_label.setText("")
+            self.selected_files_label.setText("")
+            self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
@@ -1369,18 +1843,33 @@ class MainWindow(QMainWindow):
         auto_pair = set(self.auto_pairs.get(patient_id, ()))
 
         self.current_patient_label.setText(patient_id)
-        self.selection_label.setText(
-            "Choose exactly two rows to average. "
-            "The last column shows the automatic pair that will be used if you reset."
-        )
+        self.selection_label.setText("Choose two rows to average for export.")
+        selected_files = []
+        for frame_index in selection:
+            if frame_index in rows.index:
+                file_name = rows.loc[frame_index].get("Source File")
+                if file_name:
+                    selected_files.append(str(file_name))
         if len(selection) == 2:
-            self.review_warning_label.setText(
-                "Current selection is complete and ready for export."
+            self.review_selection_badge.setObjectName("successPill")
+            self.review_selection_badge.setText("Ready for export")
+            self.selected_files_label.setText(
+                "Selected files: " + " | ".join(selected_files)
+                if selected_files
+                else "Selected files: automatic pair"
             )
+            self.review_warning_label.setText("")
         else:
-            self.review_warning_label.setText(
-                f"Current selection has {len(selection)} row(s). Export stays disabled until this patient has exactly two selected rows."
+            self.review_selection_badge.setObjectName("neutralPill")
+            self.review_selection_badge.setText(f"{len(selection)}/2 selected")
+            self.selected_files_label.setText(
+                "Selected files: " + " | ".join(selected_files)
+                if selected_files
+                else "Selected files: none selected yet"
             )
+            self.review_warning_label.setText("")
+        self.review_selection_badge.style().unpolish(self.review_selection_badge)
+        self.review_selection_badge.style().polish(self.review_selection_badge)
 
         self.updating_pair_table = True
         self.pair_table.setRowCount(len(rows))
@@ -1396,18 +1885,25 @@ class MainWindow(QMainWindow):
             )
 
             values = [
-                format_value(row.get("Source File")),
                 format_value(row.get("Peripheral Systolic Pressure (mmHg)")),
                 format_value(row.get("Peripheral Diastolic Pressure (mmHg)")),
                 format_value(row.get("Peripheral Mean Pressure (mmHg)")),
                 format_value(row.get("Aortic Systolic Pressure (mmHg)")),
                 format_value(row.get("Aortic Diastolic Pressure (mmHg)")),
+                format_value(row.get("Source File")),
                 "Auto" if frame_index in auto_pair else "",
             ]
             for column_offset, value in enumerate(values, start=1):
                 item = QTableWidgetItem(value)
-                if column_offset == 1:
+                if column_offset == 6:
                     item.setData(Qt.ItemDataRole.UserRole, frame_index)
+                if column_offset != 6:
+                    item.setTextAlignment(
+                        int(
+                            Qt.AlignmentFlag.AlignCenter
+                            | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    )
                 if frame_index in selection:
                     item.setBackground(QColor("#dff1ea"))
                 elif frame_index in auto_pair:
@@ -1415,9 +1911,12 @@ class MainWindow(QMainWindow):
                 self.pair_table.setItem(table_row, column_offset, item)
 
         self.updating_pair_table = False
-        self.pair_table.resizeColumnsToContents()
+        self._apply_pair_table_layout()
+        self._update_pair_table_height()
         if self.pair_table.rowCount() > 0:
+            self.pair_table.setCurrentCell(0, 1)
             self.pair_table.selectRow(0)
+            self.pair_table.horizontalScrollBar().setValue(0)
         self._refresh_difference_table(patient_id)
 
     def reset_current_patient_to_auto(self) -> None:
@@ -1432,7 +1931,11 @@ class MainWindow(QMainWindow):
         self.manual_pairs[patient_id] = (
             auto_selection[:2] if len(auto_selection) == 2 else fallback
         )
+        self._render_current_patient()
+        self._refresh_difference_table(patient_id)
         self._rebuild_analysis(preserve_patient_id=patient_id)
+        if self.current_manual_patient_id() == patient_id:
+            self._refresh_difference_table(patient_id)
 
     def _settings_changed(self) -> None:
         if self.updating_settings:
@@ -1519,6 +2022,7 @@ class MainWindow(QMainWindow):
         if not self.bundle or not patient_id:
             for column_index in range(self.diff_table.columnCount()):
                 self.diff_table.setItem(0, column_index, QTableWidgetItem(""))
+            self._apply_diff_table_layout()
             self.diff_status_label.setText(
                 "Select exactly two rows to see pair differences."
             )
@@ -1528,6 +2032,7 @@ class MainWindow(QMainWindow):
         if len(selection) != 2:
             for column_index in range(self.diff_table.columnCount()):
                 self.diff_table.setItem(0, column_index, QTableWidgetItem(""))
+            self._apply_diff_table_layout()
             self.diff_status_label.setText(
                 "Select exactly two rows to see pair differences."
             )
@@ -1550,7 +2055,7 @@ class MainWindow(QMainWindow):
             item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
             self.diff_table.setItem(0, column_index, item)
 
-        self.diff_table.resizeColumnsToContents()
+        self._apply_diff_table_layout()
         if pair_alert_triggered(pair_df, self.pair_alert_threshold):
             self.diff_status_label.setText(
                 f"Alert: the selected pair differs by more than {self.pair_alert_threshold:.1f} mmHg in peripheral systolic or diastolic pressure."
@@ -1584,7 +2089,7 @@ class MainWindow(QMainWindow):
             return
 
         frame = self.bundle.analyzed_df.drop(
-            columns=["Recording #", "Source Path", "Special Row"],
+            columns=["Record #", "Source Path", "Special Row"],
             errors="ignore",
         )
         self._populate_dataframe_table(
@@ -1613,7 +2118,7 @@ class MainWindow(QMainWindow):
                     item.setBackground(QColor("#dff1ea"))
                 table.setItem(table_row, column_index, item)
 
-        table.resizeColumnsToContents()
+        self._apply_data_table_widths(table, columns)
         if table.rowCount() > 0:
             table.selectRow(0)
 
@@ -1670,7 +2175,7 @@ class MainWindow(QMainWindow):
         row = self.pair_table.currentRow()
         if row < 0:
             return
-        item = self.pair_table.item(row, 1)
+        item = self.pair_table.item(row, 6)
         if item is None:
             return
         frame_index = item.data(Qt.ItemDataRole.UserRole)

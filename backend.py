@@ -30,7 +30,7 @@ COLUMNS = [
     "Scanned ID",
     "Scan Date",
     "Scan Time",
-    "Recording #",
+    "Record #",
     "Analyed",
     "Date of Birth",
     "Age",
@@ -463,9 +463,9 @@ def prepare_dataframe(records: list[dict[str, object]]) -> tuple[pd.DataFrame, p
     )
 
     special_row_mask = df["Special Row"].copy()
-    df["Recording #"] = None
+    df["Record #"] = None
     valid_rows = ~df["Special Row"]
-    df.loc[valid_rows, "Recording #"] = (
+    df.loc[valid_rows, "Record #"] = (
         df[valid_rows].groupby("Patient ID").cumcount() + 1
     )
 
@@ -593,7 +593,7 @@ def build_analyzed_data(
         "Scan Date",
         "Scan Time",
         "Analyed",
-        "Recording #",
+        "Record #",
         "Source Path",
     }
 
@@ -752,7 +752,7 @@ def save_to_excel(
     df = display_dataframe(bundle)
 
     kept_df = df[df["Analyed"] == "Yes"].copy()
-    averaged_df = bundle.analyzed_df.drop(columns=["Recording #"], errors="ignore").copy()
+    averaged_df = bundle.analyzed_df.drop(columns=["Record #"], errors="ignore").copy()
 
     date_columns = ["Scan Date", "Date of Birth"]
 
