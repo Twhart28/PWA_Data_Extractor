@@ -787,6 +787,7 @@ def save_to_excel(
 
         header_alignment = Alignment(horizontal="left")
         center_alignment = Alignment(horizontal="center")
+        left_alignment = Alignment(horizontal="left")
         sheet_frames = {
             "All Data": df_to_save,
             "Kept Data": kept_df_to_save,
@@ -795,23 +796,25 @@ def save_to_excel(
 
         for sheet_name, frame in sheet_frames.items():
             sheet = writer.book[sheet_name]
+            source_file_col_index = (
+                frame.columns.get_loc("Source File") + 1
+                if "Source File" in frame.columns
+                else None
+            )
 
-            for first_column in sheet.iter_cols(min_col=1, max_col=1):
-                for cell in first_column:
-                    cell.alignment = center_alignment
-
-            if sheet.max_column > 1:
-                for first_column in sheet.iter_cols(min_col=2, max_col=2):
-                    for cell in first_column:
+            for row in sheet.iter_rows(
+                min_row=1,
+                max_row=sheet.max_row,
+                min_col=1,
+                max_col=sheet.max_column,
+            ):
+                for cell in row:
+                    if cell.row == 1:
                         cell.alignment = header_alignment
-
-            if sheet_name == "All Data":
-                for row_index, is_special in bundle.special_row_mask.items():
-                    if not is_special:
-                        continue
-
-                    patient_cell = sheet.cell(row=row_index + 2, column=2)
-                    patient_cell.alignment = header_alignment
+                    elif source_file_col_index is not None and cell.column == source_file_col_index:
+                        cell.alignment = left_alignment
+                    else:
+                        cell.alignment = center_alignment
 
             for date_column in date_columns:
                 if date_column not in frame.columns:
