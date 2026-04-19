@@ -36,4 +36,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['App_Logo.ico'],
+    version='pwa_extractor_version_info.txt',
 )

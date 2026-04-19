@@ -46,8 +46,10 @@ try:
     from .backend import (
         ANALYSIS_MODE,
         APP_ICON_PATH,
+        APP_PUBLISHER,
         APP_SUBTITLE,
         APP_TITLE,
+        APP_VERSION,
         CONTACT_EMAIL,
         COLUMNS,
         EXTRA_COLUMNS,
@@ -74,8 +76,10 @@ except ImportError:
     from backend import (
         ANALYSIS_MODE,
         APP_ICON_PATH,
+        APP_PUBLISHER,
         APP_SUBTITLE,
         APP_TITLE,
+        APP_VERSION,
         CONTACT_EMAIL,
         COLUMNS,
         EXTRA_COLUMNS,
@@ -125,7 +129,7 @@ class ProcessingWorker(QObject):
 class ReadmeDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("About PWA Data Extractor")
+        self.setWindowTitle(f"About {APP_TITLE} {APP_VERSION}")
         self.resize(860, 620)
         if APP_ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
@@ -137,6 +141,7 @@ class ReadmeDialog(QDialog):
         title = QLabel(APP_TITLE)
         title.setObjectName("dialogTitle")
         subtitle = QLabel(
+            f"Version {APP_VERSION} | {APP_PUBLISHER}\n"
             "Instructions, export notes, repository link, and support contact."
         )
         subtitle.setObjectName("dialogSubtitle")

@@ -15,6 +15,8 @@ ANALYSIS_MODE = 2
 
 APP_DIR = Path(__file__).resolve().parent
 APP_TITLE = "PWA Data Extractor"
+APP_VERSION = "1.0.0"
+APP_PUBLISHER = "Thomas Hart"
 APP_SUBTITLE = (
     "Process PWA detailed reports, review multi-entry patients, and export the "
     "same Excel workbook structure."

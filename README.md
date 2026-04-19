@@ -111,11 +111,30 @@ These settings affect the review display and alert behavior for the current sess
 .\.venv\Scripts\python.exe .\pwa_extractor.py
 ```
 
-## Build Executable
+## Build Portable Executable
 
 ```powershell
 .\.venv\Scripts\pyinstaller.exe .\pwa_extractor.spec
 ```
+
+## Build Installer
+
+This project includes an Inno Setup installer script for non-technical users.
+
+1. Install Inno Setup
+2. Build the portable executable
+3. Build the installer
+
+Or use the bundled release script:
+
+```powershell
+.\build_release.ps1
+```
+
+That produces:
+
+- `dist\pwa_extractor.exe`
+- `release\PWA_Data_Extractor_Setup.exe`
 
 ## Project Layout
 
@@ -123,6 +142,8 @@ These settings affect the review display and alert behavior for the current sess
 - `app.py`: PySide6 desktop user interface
 - `backend.py`: PDF parsing, pairing logic, and Excel export
 - `pwa_extractor.spec`: PyInstaller build spec
+- `pwa_extractor_installer.iss`: Inno Setup installer script
+- `build_release.ps1`: release build script for the portable app and installer
 
 ## Notes
 
