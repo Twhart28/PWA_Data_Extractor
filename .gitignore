@@ -4,4 +4,8 @@ release/
 __pycache__/
 .venv/
 .codex/
+.claude/
+frontend/.vite/
+frontend/dist/
+frontend/node_modules/
 *.pyc
