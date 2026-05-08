@@ -18,7 +18,7 @@ APP_TITLE = "PWA Data Extractor"
 APP_VERSION = "1.0.0"
 APP_PUBLISHER = "Thomas Hart"
 APP_SUBTITLE = (
-    "Process PWA detailed reports, review multi-entry patients, and export the "
+    "Process PWA reports, review multi-entry patients, and export the "
     "same Excel workbook structure."
 )
 APP_ICON_PATH = APP_DIR / "App_Logo.ico"
@@ -29,6 +29,10 @@ REPOSITORY_URL = "https://github.com/Twhart28/PWA_Data_Extractor"
 COLUMNS = [
     "Source File",
     "Patient ID",
+    "Subject ID",
+    "Visit",
+    "Timepoint",
+    "Report Type",
     "Scanned ID",
     "Scan Date",
     "Scan Time",
@@ -73,12 +77,17 @@ COLUMNS = [
 
 EXTRA_COLUMNS = ["Source Path"]
 ALL_DATA_COLUMNS = [*COLUMNS, *EXTRA_COLUMNS]
+REPORT_MODE_DETAILED = "detailed"
+REPORT_MODE_CLINICAL = "clinical"
+GROUP_MODE_SUBJECT = "subject"
+GROUP_MODE_SUBJECT_TIMEPOINT = "subject_timepoint"
+GROUP_MODE_SUBJECT_VISIT = "subject_visit"
+GROUP_MODE_SUBJECT_VISIT_TIMEPOINT = "subject_visit_timepoint"
 DETAILED_REPORT_MARKER = "PWA Detailed Report"
 CLINICAL_REPORT_MARKER = "PWA Clinical Report"
-CLINICAL_REPORT_MESSAGE = (
-    "Recognized as a Clinical Report, only upload the Detailed Reports"
-)
-UNRECOGNIZED_REPORT_MESSAGE = "Not recognized as a PWA Detailed Report"
+CLINICAL_REPORT_MESSAGE = "Recognized as a Clinical Report, switch input mode to Clinical Reports"
+DETAILED_REPORT_MESSAGE = "Recognized as a Detailed Report, switch input mode to Detailed Reports"
+UNRECOGNIZED_REPORT_MESSAGE = "Not recognized as the selected PWA report type"
 ANALYSIS_FIELDS_BY_MODE: dict[int, list[str]] = {
     1: [
         "Peripheral Systolic Pressure (mmHg)",
@@ -134,6 +143,14 @@ class AnalysisBundle:
     manual_patients: list[str]
 
 
+@dataclass
+class FilenameMetadata:
+    subject_id: str | None
+    visit: str | None
+    timepoint: str | None
+    grouping_key: str
+
+
 def load_readme_text() -> str:
     if README_PATH.exists():
         return README_PATH.read_text(encoding="utf-8")
@@ -164,6 +181,14 @@ def _to_number(value: str) -> int | float | str:
 
 
 def _extract_scan_datetime(text: str) -> tuple[str | None, str | None]:
+    labeled_match = re.search(
+        r"Date(?:\s+and)?\s+Time:\s*([0-9]{2}/[0-9]{2}/[0-9]{4})\s+([0-9]{2}:[0-9]{2}(?::[0-9]{2})?)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if labeled_match:
+        return labeled_match.group(1), labeled_match.group(2)
+
     date_time_match = None
     for date_time_match in re.finditer(
         r"([0-9]{2}/[0-9]{2}/[0-9]{4})\s+([0-9]{2}:[0-9]{2}(?::[0-9]{2})?)",
@@ -175,35 +200,114 @@ def _extract_scan_datetime(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def derive_patient_id(pdf_path: Path) -> str:
+def _clean_component(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "", value).strip()
+    return cleaned.upper() if cleaned else None
+
+
+def _extract_numeric_component(value: str | None) -> str | None:
+    cleaned = _clean_component(value)
+    if not cleaned:
+        return None
+    match = re.search(r"(\d+)", cleaned)
+    return match.group(1) if match else None
+
+
+def parse_filename_metadata(
+    pdf_path: Path,
+    grouping_mode: str = GROUP_MODE_SUBJECT,
+) -> FilenameMetadata:
     stem = pdf_path.stem.strip()
     if not stem:
-        return ""
+        return FilenameMetadata(None, None, None, "")
 
-    first_break_index: int | None = None
-    for index, char in enumerate(stem):
-        if char in (" ", "_"):
-            first_break_index = index
+    tokens = [token for token in re.split(r"[\s_-]+", stem) if token]
+    subject_id: str | None = None
+    visit: str | None = None
+    timepoint: str | None = None
+    subject_index = -1
+
+    for index, token in enumerate(tokens):
+        if re.fullmatch(r"[A-Za-z]+[A-Za-z0-9]*\d+[A-Za-z0-9]*", token):
+            subject_id = _extract_numeric_component(token) or _clean_component(token)
+            subject_index = index
             break
 
-    if first_break_index is None:
-        return stem
-
-    trailing_token = stem[first_break_index + 1 :].split(" ", 1)[0].split("_", 1)[0]
-    if re.fullmatch(r"T\d+", trailing_token, flags=re.IGNORECASE):
-        second_break_index = None
-        for index in range(first_break_index + 1, len(stem)):
-            if stem[index] in (" ", "_") and index > first_break_index + 1:
-                second_break_index = index
+    if subject_id is None:
+        for index, token in enumerate(tokens):
+            if re.search(r"\d", token):
+                subject_id = _extract_numeric_component(token) or _clean_component(token)
+                subject_index = index
                 break
-        if second_break_index is None:
-            return stem
-        return stem[:second_break_index].strip()
 
-    return stem[:first_break_index].strip()
+    search_tokens = tokens[subject_index + 1 :] if subject_index >= 0 else tokens
+    numeric_candidates: list[str] = []
+    explicit_visit: str | None = None
+    explicit_timepoint: str | None = None
+
+    for token in search_tokens:
+        cleaned_token = token.strip()
+
+        visit_match = re.fullmatch(r"V(?:ISIT)?(\d+)", cleaned_token, flags=re.IGNORECASE)
+        if visit_match:
+            explicit_visit = visit_match.group(1)
+            continue
+
+        timepoint_match = re.fullmatch(
+            r"(?:T|TP|TIMEPOINT)(\d+)",
+            cleaned_token,
+            flags=re.IGNORECASE,
+        )
+        if timepoint_match:
+            explicit_timepoint = timepoint_match.group(1)
+            continue
+
+        numeric_value = _extract_numeric_component(cleaned_token)
+        if numeric_value is not None:
+            numeric_candidates.append(numeric_value)
+
+    visit = explicit_visit
+    timepoint = explicit_timepoint
+
+    if visit is None and timepoint is None:
+        if len(numeric_candidates) >= 2:
+            visit = numeric_candidates[0]
+            timepoint = numeric_candidates[1]
+        elif len(numeric_candidates) == 1:
+            timepoint = numeric_candidates[0]
+    else:
+        remaining_candidates = list(numeric_candidates)
+        if visit is None and remaining_candidates:
+            visit = remaining_candidates.pop(0)
+        if timepoint is None and remaining_candidates:
+            timepoint = remaining_candidates.pop(0)
+
+    fallback_subject = _extract_numeric_component(stem) or _clean_component(stem)
+    key_parts = [subject_id or fallback_subject or stem.strip()]
+    if grouping_mode == GROUP_MODE_SUBJECT_VISIT and visit:
+        key_parts.append(visit)
+    if grouping_mode == GROUP_MODE_SUBJECT_TIMEPOINT and timepoint:
+        key_parts.append(timepoint)
+    if grouping_mode == GROUP_MODE_SUBJECT_VISIT_TIMEPOINT:
+        if visit:
+            key_parts.append(visit)
+        if timepoint:
+            key_parts.append(timepoint)
+
+    grouping_key = "_".join([part for part in key_parts if part])
+    return FilenameMetadata(subject_id, visit, timepoint, grouping_key)
 
 
-def parse_report_text(text: str) -> dict[str, object]:
+def _finalize_record(record: dict[str, object]) -> dict[str, object]:
+    for key, value in record.items():
+        if isinstance(value, str):
+            record[key] = _to_number(value)
+    return record
+
+
+def parse_detailed_report_text(text: str) -> dict[str, object]:
     normalized = re.sub(r"\s+", " ", text)
 
     patient_id = _search(r"Patient ID:\s*(\S+)", normalized)
@@ -393,10 +497,76 @@ def parse_report_text(text: str) -> dict[str, object]:
         "MAP Diastolic (mmHg)": map_diastolic,
     }
 
-    for key, value in record.items():
-        if isinstance(value, str):
-            record[key] = _to_number(value)
-    return record
+    return _finalize_record(record)
+
+
+def parse_clinical_report_text(text: str) -> dict[str, object]:
+    normalized = re.sub(r"\s+", " ", text)
+
+    scanned_id = _search(r"Patient ID:\s*(\S+)", normalized)
+    dob = _search(r"Date Of Birth:\s*([0-9]{2}/[0-9]{2}/[0-9]{4})", normalized)
+    scan_date, scan_time = _extract_scan_datetime(normalized)
+
+    age_gender_match = re.search(
+        r"Age,\s*Gender:\s*([0-9]+),\s*([A-Za-z]+)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    age = age_gender_match.group(1) if age_gender_match else None
+    gender = age_gender_match.group(2) if age_gender_match else None
+
+    height_cm = _search(r"Height:\s*([0-9.]+)\s*cm", normalized)
+    height_m = round(float(height_cm) / 100, 2) if height_cm else None
+    pulses = _search(r"Number Of Pulses:\s*([0-9]+)", normalized)
+
+    brachial_match = re.search(
+        r"Brachial SYS/DIA:\s*([0-9.]+)\s*/\s*([0-9.]+)\s*mmHg",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    peripheral_sys = brachial_match.group(1) if brachial_match else None
+    peripheral_dia = brachial_match.group(2) if brachial_match else None
+
+    aortic_sys = _search(r"Aortic SP:\s*([0-9.]+)\s*mmHg", normalized)
+    aortic_dia = _search(r"\bDP:\s*([0-9.]+)\s*mmHg", normalized)
+    aortic_pp = _search(r"\bPP:\s*([0-9.]+)\s*mmHg", normalized)
+    heart_rate = _search(r"\bHR:\s*([0-9.]+)\s*bpm", normalized)
+
+    peripheral_pp = None
+    peripheral_mean = None
+    if peripheral_sys is not None and peripheral_dia is not None:
+        try:
+            peripheral_sys_value = float(peripheral_sys)
+            peripheral_dia_value = float(peripheral_dia)
+            peripheral_pp = peripheral_sys_value - peripheral_dia_value
+            peripheral_mean = round(
+                (peripheral_sys_value + (2 * peripheral_dia_value)) / 3,
+                2,
+            )
+        except ValueError:
+            peripheral_pp = None
+            peripheral_mean = None
+
+    record = {
+        "Scanned ID": scanned_id,
+        "Scan Date": scan_date,
+        "Scan Time": scan_time,
+        "Date of Birth": dob,
+        "Age": age,
+        "Gender": gender,
+        "Height (m)": height_m,
+        "# of Pulses": pulses,
+        "Peripheral Systolic Pressure (mmHg)": peripheral_sys,
+        "Peripheral Diastolic Pressure (mmHg)": peripheral_dia,
+        "Peripheral Pulse Pressure (mmHg)": peripheral_pp,
+        "Peripheral Mean Pressure (mmHg)": peripheral_mean,
+        "Aortic Systolic Pressure (mmHg)": aortic_sys,
+        "Aortic Diastolic Pressure (mmHg)": aortic_dia,
+        "Aortic Pulse Pressure (mmHg)": aortic_pp,
+        "Heart Rate (bpm)": heart_rate,
+    }
+
+    return _finalize_record(record)
 
 
 def detect_report_type(text: str) -> str:
@@ -416,19 +586,42 @@ def empty_record(message: str, pdf_path: Path) -> dict[str, object]:
     return record
 
 
-def process_pdf(pdf_path: Path) -> dict[str, object]:
+def _apply_filename_metadata(
+    record: dict[str, object],
+    pdf_path: Path,
+    report_type: str,
+    grouping_mode: str,
+) -> dict[str, object]:
+    metadata = parse_filename_metadata(pdf_path, grouping_mode=grouping_mode)
+    record["Source File"] = pdf_path.name
+    record["Source Path"] = str(pdf_path)
+    record["Patient ID"] = metadata.grouping_key or pdf_path.stem.strip() or pdf_path.name
+    record["Subject ID"] = metadata.subject_id
+    record["Visit"] = metadata.visit
+    record["Timepoint"] = metadata.timepoint
+    record["Report Type"] = report_type.title()
+    return record
+
+
+def process_pdf(
+    pdf_path: Path,
+    report_mode: str = REPORT_MODE_DETAILED,
+    grouping_mode: str = GROUP_MODE_SUBJECT,
+) -> dict[str, object]:
     text = extract_text(pdf_path)
     report_type = detect_report_type(text)
 
-    if report_type == "detailed":
-        data = parse_report_text(text)
-        data["Source File"] = pdf_path.name
-        data["Source Path"] = str(pdf_path)
-        data["Patient ID"] = derive_patient_id(pdf_path)
-        return data
+    if report_type == REPORT_MODE_DETAILED:
+        if report_mode != REPORT_MODE_DETAILED:
+            return empty_record(DETAILED_REPORT_MESSAGE, pdf_path)
+        data = parse_detailed_report_text(text)
+        return _apply_filename_metadata(data, pdf_path, report_type, grouping_mode)
 
-    if report_type == "clinical":
-        return empty_record(CLINICAL_REPORT_MESSAGE, pdf_path)
+    if report_type == REPORT_MODE_CLINICAL:
+        if report_mode != REPORT_MODE_CLINICAL:
+            return empty_record(CLINICAL_REPORT_MESSAGE, pdf_path)
+        data = parse_clinical_report_text(text)
+        return _apply_filename_metadata(data, pdf_path, report_type, grouping_mode)
 
     return empty_record(UNRECOGNIZED_REPORT_MESSAGE, pdf_path)
 
@@ -442,7 +635,11 @@ def prepare_dataframe(records: list[dict[str, object]]) -> tuple[pd.DataFrame, p
 
     df = df[ALL_DATA_COLUMNS]
     df["Special Row"] = df["Patient ID"].isin(
-        {CLINICAL_REPORT_MESSAGE, UNRECOGNIZED_REPORT_MESSAGE}
+        {
+            CLINICAL_REPORT_MESSAGE,
+            DETAILED_REPORT_MESSAGE,
+            UNRECOGNIZED_REPORT_MESSAGE,
+        }
     )
     df.loc[df["Special Row"], COLUMNS[2:]] = None
 
@@ -733,6 +930,8 @@ def record_status(patient_id: object) -> str:
     value = str(patient_id or "")
     if value == CLINICAL_REPORT_MESSAGE:
         return "Clinical report"
+    if value == DETAILED_REPORT_MESSAGE:
+        return "Detailed report"
     if value == UNRECOGNIZED_REPORT_MESSAGE:
         return "Unrecognized"
     return "Detailed report"

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -50,9 +51,15 @@ try:
         APP_SUBTITLE,
         APP_TITLE,
         APP_VERSION,
+        GROUP_MODE_SUBJECT,
+        GROUP_MODE_SUBJECT_TIMEPOINT,
+        GROUP_MODE_SUBJECT_VISIT,
+        GROUP_MODE_SUBJECT_VISIT_TIMEPOINT,
         CONTACT_EMAIL,
         COLUMNS,
         EXTRA_COLUMNS,
+        REPORT_MODE_CLINICAL,
+        REPORT_MODE_DETAILED,
         REPOSITORY_URL,
         AnalysisBundle,
         build_analysis,
@@ -80,9 +87,15 @@ except ImportError:
         APP_SUBTITLE,
         APP_TITLE,
         APP_VERSION,
+        GROUP_MODE_SUBJECT,
+        GROUP_MODE_SUBJECT_TIMEPOINT,
+        GROUP_MODE_SUBJECT_VISIT,
+        GROUP_MODE_SUBJECT_VISIT_TIMEPOINT,
         CONTACT_EMAIL,
         COLUMNS,
         EXTRA_COLUMNS,
+        REPORT_MODE_CLINICAL,
+        REPORT_MODE_DETAILED,
         REPOSITORY_URL,
         AnalysisBundle,
         build_analysis,
@@ -106,9 +119,16 @@ class ProcessingWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, pdf_paths: list[Path]):
+    def __init__(
+        self,
+        pdf_paths: list[Path],
+        report_mode: str,
+        grouping_mode: str,
+    ):
         super().__init__()
         self.pdf_paths = pdf_paths
+        self.report_mode = report_mode
+        self.grouping_mode = grouping_mode
 
     def run(self) -> None:
         records: list[dict[str, object]] = []
@@ -117,7 +137,13 @@ class ProcessingWorker(QObject):
         try:
             for index, pdf_path in enumerate(self.pdf_paths, start=1):
                 self.progress.emit(index - 1, total_files, f"Reading {pdf_path.name}")
-                records.append(process_pdf(pdf_path))
+                records.append(
+                    process_pdf(
+                        pdf_path,
+                        report_mode=self.report_mode,
+                        grouping_mode=self.grouping_mode,
+                    )
+                )
                 self.progress.emit(index, total_files, f"Processed {pdf_path.name}")
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -294,6 +320,9 @@ class MainWindow(QMainWindow):
         self.bundle: Optional[AnalysisBundle] = None
         self.auto_pairs: dict[str, tuple[int, int]] = {}
         self.manual_pairs: dict[str, list[int]] = {}
+        self.review_patients: list[str] = []
+        self.alert_review_patients: list[str] = []
+        self.pair_alert_approvals: set[str] = set()
         self.pdf_viewers: list[PdfViewerDialog] = []
         self.thread: Optional[QThread] = None
         self.worker: Optional[ProcessingWorker] = None
@@ -304,7 +333,13 @@ class MainWindow(QMainWindow):
         self.pair_alert_threshold = 5.0
         self.diff_green_max = 3.0
         self.diff_yellow_max = 6.0
+        self.report_mode = REPORT_MODE_DETAILED
+        self.grouping_mode = GROUP_MODE_SUBJECT
         self.setup_scroll_area: Optional[QScrollArea] = None
+        self.setup_mode_value: Optional[QLabel] = None
+        self.setup_grouping_value: Optional[QLabel] = None
+        self.setup_file_count_value: Optional[QLabel] = None
+        self.setup_export_value: Optional[QLabel] = None
         self.review_split: Optional[QSplitter] = None
         self.review_patient_panel: Optional[QFrame] = None
         self.review_detail_panel: Optional[QFrame] = None
@@ -329,16 +364,108 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(self._build_header())
 
-        workflow = QSplitter(Qt.Orientation.Horizontal)
-        workflow.setChildrenCollapsible(False)
-        workflow.addWidget(self._build_setup_panel())
-        workflow.addWidget(self._build_results_panel())
-        workflow.setStretchFactor(0, 0)
-        workflow.setStretchFactor(1, 1)
-        workflow.setSizes([360, 1200])
-        root_layout.addWidget(workflow, 1)
+        self.workflow_tabs = QTabWidget()
+        self.workflow_tabs.addTab(self._build_setup_page(), "1. Import / Process")
+        self.workflow_tabs.addTab(self._build_results_panel(), "2. Review / Export")
+        self.workflow_tabs.setTabEnabled(1, False)
+        root_layout.addWidget(self.workflow_tabs, 1)
 
         self.setCentralWidget(root)
+
+    def _build_setup_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(18)
+        layout.addWidget(self._build_setup_sidebar(), 0)
+        layout.addWidget(self._build_setup_panel(), 1)
+        return page
+
+    def _build_setup_sidebar(self) -> QWidget:
+        column = QWidget()
+        column.setMinimumWidth(300)
+        column.setMaximumWidth(380)
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        hero = QFrame()
+        hero.setObjectName("setupHeroCard")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 18, 18, 18)
+        hero_layout.setSpacing(10)
+
+        hero_title = QLabel("Start a new extraction run")
+        hero_title.setObjectName("reviewPatientTitle")
+        hero_text = QLabel(
+            "Choose the report type, confirm how files should be grouped, then process the PDFs. "
+            "Once the dataset is built, the app moves you into review and export."
+        )
+        hero_text.setObjectName("helperSmall")
+        hero_text.setWordWrap(True)
+        hero_layout.addWidget(hero_title)
+        hero_layout.addWidget(hero_text)
+        layout.addWidget(hero)
+
+        summary = QFrame()
+        summary.setObjectName("setupGuideCard")
+        summary_layout = QVBoxLayout(summary)
+        summary_layout.setContentsMargins(18, 16, 18, 16)
+        summary_layout.setSpacing(10)
+        summary_layout.addWidget(self._micro_title("Run summary"))
+        self.setup_mode_value = QLabel("")
+        self.setup_grouping_value = QLabel("")
+        self.setup_file_count_value = QLabel("")
+        self.setup_export_value = QLabel("")
+        for label in [
+            self.setup_mode_value,
+            self.setup_grouping_value,
+            self.setup_file_count_value,
+            self.setup_export_value,
+        ]:
+            label.setObjectName("helperSmall")
+            label.setWordWrap(True)
+            summary_layout.addWidget(label)
+        layout.addWidget(summary)
+
+        guide = QFrame()
+        guide.setObjectName("setupGuideCard")
+        guide_layout = QVBoxLayout(guide)
+        guide_layout.setContentsMargins(18, 16, 18, 16)
+        guide_layout.setSpacing(10)
+        guide_layout.addWidget(self._micro_title("Recommended flow"))
+        for text in [
+            "1. Select Detailed or Clinical reports.",
+            "2. Pick how filenames should be grouped for averaging.",
+            "3. Add PDFs and confirm the workbook export path.",
+            "4. Process the files, then review only the flagged patients.",
+        ]:
+            step = QLabel(text)
+            step.setObjectName("helperSmall")
+            step.setWordWrap(True)
+            guide_layout.addWidget(step)
+        layout.addWidget(guide)
+
+        grouping = QFrame()
+        grouping.setObjectName("setupGuideCard")
+        grouping_layout = QVBoxLayout(grouping)
+        grouping_layout.setContentsMargins(18, 16, 18, 16)
+        grouping_layout.setSpacing(10)
+        grouping_layout.addWidget(self._micro_title("Grouping guide"))
+        for text in [
+            "Subject only: average everything under the same subject number.",
+            "Subject + timepoint: use when files have one post-subject number that identifies timepoint.",
+            "Subject + visit: use only when visit is explicitly part of the filename.",
+            "Subject + visit + timepoint: use when both visit and timepoint are present.",
+        ]:
+            bullet = QLabel(f"• {text}")
+            bullet.setObjectName("helperSmall")
+            bullet.setWordWrap(True)
+            grouping_layout.addWidget(bullet)
+        layout.addWidget(grouping)
+
+        layout.addStretch(1)
+        return column
 
     def _build_header(self) -> QWidget:
         container = QWidget()
@@ -373,9 +500,8 @@ class MainWindow(QMainWindow):
 
     def _build_setup_panel(self) -> QWidget:
         panel = QFrame()
-        panel.setObjectName("panel")
-        panel.setMinimumWidth(360)
-        panel.setMaximumWidth(460)
+        panel.setObjectName("setupWorkspace")
+        panel.setMinimumWidth(620)
         outer_layout = QVBoxLayout(panel)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
@@ -401,9 +527,46 @@ class MainWindow(QMainWindow):
             )
         )
 
+        mode_grid = QGridLayout()
+        mode_grid.setHorizontalSpacing(8)
+        mode_grid.setVerticalSpacing(6)
+        mode_grid.setColumnStretch(0, 0)
+        mode_grid.setColumnStretch(1, 1)
+
+        report_mode_label = QLabel("Input mode")
+        self.report_mode_combo = QComboBox()
+        self.report_mode_combo.addItem("Detailed reports", REPORT_MODE_DETAILED)
+        self.report_mode_combo.addItem("Clinical reports", REPORT_MODE_CLINICAL)
+        self.report_mode_combo.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.report_mode_combo.installEventFilter(self)
+
+        grouping_mode_label = QLabel("Grouping mode")
+        self.grouping_mode_combo = QComboBox()
+        self.grouping_mode_combo.addItem("Subject only", GROUP_MODE_SUBJECT)
+        self.grouping_mode_combo.addItem(
+            "Subject + timepoint",
+            GROUP_MODE_SUBJECT_TIMEPOINT,
+        )
+        self.grouping_mode_combo.addItem("Subject + visit", GROUP_MODE_SUBJECT_VISIT)
+        self.grouping_mode_combo.addItem(
+            "Subject + visit + timepoint",
+            GROUP_MODE_SUBJECT_VISIT_TIMEPOINT,
+        )
+        self.grouping_mode_combo.setToolTip(
+            "Choose how files should be grouped together for averaging based on the filename."
+        )
+        self.grouping_mode_combo.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.grouping_mode_combo.installEventFilter(self)
+
+        mode_grid.addWidget(report_mode_label, 0, 0)
+        mode_grid.addWidget(self.report_mode_combo, 0, 1)
+        mode_grid.addWidget(grouping_mode_label, 1, 0)
+        mode_grid.addWidget(self.grouping_mode_combo, 1, 1)
+        layout.addLayout(mode_grid)
+
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.file_list.setMinimumHeight(110)
+        self.file_list.setMinimumHeight(260)
         self.file_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.file_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.file_list.viewport().installEventFilter(self)
@@ -534,6 +697,8 @@ class MainWindow(QMainWindow):
         self.clear_files_button.clicked.connect(self.clear_pdf_files)
         self.browse_output_button.clicked.connect(self.browse_output_path)
         self.output_line.textChanged.connect(self._output_path_changed)
+        self.report_mode_combo.currentIndexChanged.connect(self._report_mode_changed)
+        self.grouping_mode_combo.currentIndexChanged.connect(self._grouping_mode_changed)
         self.thresholds_help_button.clicked.connect(self.show_thresholds_help_dialog)
         self.green_max_spin.valueChanged.connect(self._settings_changed)
         self.yellow_max_spin.valueChanged.connect(self._settings_changed)
@@ -676,6 +841,8 @@ class MainWindow(QMainWindow):
             if source is self.file_list.viewport():
                 should_redirect = focus_widget is not self.file_list
             elif source in {
+                self.report_mode_combo,
+                self.grouping_mode_combo,
                 self.green_max_spin,
                 self.yellow_max_spin,
                 self.pair_alert_spin,
@@ -704,7 +871,7 @@ class MainWindow(QMainWindow):
         stats_grid.setHorizontalSpacing(12)
         stats_grid.setVerticalSpacing(12)
         self.processed_value, processed_card = self._stat_card("Processed files")
-        self.review_value, review_card = self._stat_card("Manual review patients")
+        self.review_value, review_card = self._stat_card("Review patients")
         self.averaged_value, averaged_card = self._stat_card("Averaged patients")
         self.special_value, special_card = self._stat_card("Special rows")
         stats_grid.addWidget(processed_card, 0, 0)
@@ -844,6 +1011,10 @@ class MainWindow(QMainWindow):
         width_map = {
             "Source File": 160,
             "Patient ID": 82,
+            "Subject ID": 82,
+            "Visit": 56,
+            "Timepoint": 76,
+            "Report Type": 84,
             "Scanned ID": 84,
             "Scan Date": 90,
             "Scan Time": 74,
@@ -903,7 +1074,7 @@ class MainWindow(QMainWindow):
         review_banner_layout.addWidget(self.review_count_badge, 0)
 
         self.review_status_label = QLabel(
-            "Patients with more than two entries will appear here after processing."
+            "Patients needing review will appear here after processing."
         )
         self.review_status_label.setObjectName("helperSmall")
         self.review_status_label.setWordWrap(True)
@@ -1007,10 +1178,13 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
         self.reset_auto_button = QPushButton("Reset to auto pair")
+        self.approve_pair_button = QPushButton("Approve pair")
         self.view_pair_pdf_button = QPushButton("View selected PDF")
         self.reset_auto_button.setMinimumWidth(190)
+        self.approve_pair_button.setMinimumWidth(160)
         self.view_pair_pdf_button.setMinimumWidth(190)
         action_row.addWidget(self.reset_auto_button)
+        action_row.addWidget(self.approve_pair_button)
         action_row.addWidget(self.view_pair_pdf_button)
         action_row.addStretch(1)
         detail_layout.addLayout(action_row)
@@ -1092,6 +1266,7 @@ class MainWindow(QMainWindow):
         detail_layout.addWidget(diff_card)
 
         self.reset_auto_button.clicked.connect(self.reset_current_patient_to_auto)
+        self.approve_pair_button.clicked.connect(self.approve_current_pair)
         self.view_pair_pdf_button.clicked.connect(self.open_selected_pair_pdf)
 
         review_split.addWidget(patient_panel)
@@ -1278,10 +1453,30 @@ class MainWindow(QMainWindow):
                 font-family: "Segoe UI";
                 font-size: 10pt;
             }
+            QFrame#setupWorkspace {
+                background: #fffdfa;
+                border: 1px solid #d8d0c3;
+                border-radius: 16px;
+            }
             QFrame#panel {
                 background: #fffdfa;
                 border: 1px solid #d8d0c3;
                 border-radius: 12px;
+            }
+            QFrame#setupHeroCard {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #17313a, stop:1 #245666);
+                border: 1px solid #17313a;
+                border-radius: 16px;
+            }
+            QFrame#setupHeroCard QLabel {
+                background: transparent;
+                color: #f7f6f1;
+            }
+            QFrame#setupGuideCard {
+                background: #fcfaf5;
+                border: 1px solid #e5ddd1;
+                border-radius: 14px;
             }
             QFrame#subpanel,
             QFrame#reviewQueueCard,
@@ -1329,6 +1524,10 @@ class MainWindow(QMainWindow):
             QLabel#reviewPatientTitle {
                 font-size: 14pt;
                 font-weight: 700;
+            }
+            QFrame#setupHeroCard QLabel#reviewPatientTitle {
+                color: #ffffff;
+                font-size: 15pt;
             }
             QLabel#dialogTitle {
                 font-size: 20pt;
@@ -1611,6 +1810,29 @@ class MainWindow(QMainWindow):
         self.output_line.setCursorPosition(0)
         self._sync_controls()
 
+    def _report_mode_changed(self, _index: int) -> None:
+        self.report_mode = str(self.report_mode_combo.currentData())
+        self._refresh_setup_summary()
+
+    def _grouping_mode_changed(self, _index: int) -> None:
+        self.grouping_mode = str(self.grouping_mode_combo.currentData())
+        self._refresh_setup_summary()
+
+    def _refresh_setup_summary(self) -> None:
+        if self.setup_mode_value is None:
+            return
+
+        mode_text = self.report_mode_combo.currentText()
+        grouping_text = self.grouping_mode_combo.currentText()
+        file_count = len(self.pdf_paths)
+        output_text = self.output_line.text().strip() if hasattr(self, "output_line") else ""
+        output_name = Path(output_text).name if output_text else "No workbook selected yet"
+
+        self.setup_mode_value.setText(f"<b>Input mode:</b> {mode_text}")
+        self.setup_grouping_value.setText(f"<b>Grouping:</b> {grouping_text}")
+        self.setup_file_count_value.setText(f"<b>Files selected:</b> {file_count}")
+        self.setup_export_value.setText(f"<b>Workbook:</b> {output_name}")
+
     def process_files(self) -> None:
         if not self.pdf_paths:
             QMessageBox.warning(self, "No PDFs selected", "Add one or more PWA PDF files.")
@@ -1636,7 +1858,11 @@ class MainWindow(QMainWindow):
         self._set_processing_state(True)
 
         self.thread = QThread()
-        self.worker = ProcessingWorker(self.pdf_paths)
+        self.worker = ProcessingWorker(
+            self.pdf_paths,
+            self.report_mode,
+            self.grouping_mode,
+        )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.processing_progress)
@@ -1658,10 +1884,12 @@ class MainWindow(QMainWindow):
         self.records = list(records)
         self._rebuild_analysis(seed_manual=True)
         self.status_label.setText(
-            f"Processed {len(self.records)} file(s). Review multi-entry patients before exporting."
+            f"Processed {len(self.records)} file(s). Review flagged patients before exporting."
         )
         self._set_processing_state(False)
-        if self.bundle and self.bundle.manual_patients:
+        self.workflow_tabs.setTabEnabled(1, bool(self.records))
+        self.workflow_tabs.setCurrentIndex(1)
+        if self.review_patients:
             self.tabs.setCurrentIndex(1)
         else:
             self.tabs.setCurrentIndex(0)
@@ -1669,6 +1897,7 @@ class MainWindow(QMainWindow):
     def processing_failed(self, details: str) -> None:
         self.status_label.setText("Processing failed.")
         self._set_processing_state(False)
+        self.workflow_tabs.setTabEnabled(1, bool(self.records))
         QMessageBox.critical(
             self,
             "Processing failed",
@@ -1682,6 +1911,31 @@ class MainWindow(QMainWindow):
         self.worker = None
         self._sync_controls()
 
+    def _derive_alert_review_patients(self, bundle: AnalysisBundle) -> list[str]:
+        entry_counts = patient_entry_counts(bundle.dataframe)
+        alert_patients: list[str] = []
+        for patient_id, pair in bundle.used_pairs.items():
+            if entry_counts.get(patient_id) != 2:
+                continue
+            pair_df = bundle.dataframe.loc[list(pair)]
+            if pair_alert_triggered(pair_df, self.pair_alert_threshold):
+                alert_patients.append(patient_id)
+        return alert_patients
+
+    def _review_reason(self, patient_id: str) -> str:
+        in_multi_entry = bool(self.bundle and patient_id in self.bundle.manual_patients)
+        in_alert = patient_id in self.alert_review_patients
+        if in_multi_entry and in_alert:
+            return "multi-entry, pair alert"
+        if in_multi_entry:
+            return "multi-entry"
+        if in_alert:
+            return "pair alert"
+        return "review"
+
+    def _requires_alert_approval(self, patient_id: str) -> bool:
+        return patient_id in self.alert_review_patients
+
     def _rebuild_analysis(
         self,
         seed_manual: bool = False,
@@ -1691,6 +1945,9 @@ class MainWindow(QMainWindow):
             self.bundle = None
             self.auto_pairs = {}
             self.manual_pairs = {}
+            self.review_patients = []
+            self.alert_review_patients = []
+            self.pair_alert_approvals.clear()
             self._refresh_results_views()
             return
 
@@ -1699,20 +1956,34 @@ class MainWindow(QMainWindow):
             pair_alert_threshold=self.pair_alert_threshold,
         )
         self.auto_pairs = auto_bundle.used_pairs
+        self.alert_review_patients = self._derive_alert_review_patients(auto_bundle)
+        self.review_patients = [
+            *auto_bundle.manual_patients,
+            *[
+                patient_id
+                for patient_id in self.alert_review_patients
+                if patient_id not in auto_bundle.manual_patients
+            ],
+        ]
+        self.pair_alert_approvals = {
+            patient_id
+            for patient_id in self.pair_alert_approvals
+            if patient_id in self.alert_review_patients
+        }
         if seed_manual or not self.manual_pairs:
             self.manual_pairs = initial_manual_pairs(
                 auto_bundle.dataframe,
                 auto_bundle.used_pairs,
-                auto_bundle.manual_patients,
+                self.review_patients,
             )
         else:
-            valid_patients = set(auto_bundle.manual_patients)
+            valid_patients = set(self.review_patients)
             self.manual_pairs = {
                 patient_id: selection
                 for patient_id, selection in self.manual_pairs.items()
                 if patient_id in valid_patients
             }
-            for patient_id in auto_bundle.manual_patients:
+            for patient_id in self.review_patients:
                 if patient_id not in self.manual_pairs:
                     fallback = initial_manual_pairs(
                         auto_bundle.dataframe,
@@ -1752,7 +2023,7 @@ class MainWindow(QMainWindow):
 
         overview_df = display_dataframe(self.bundle)
         entry_counts = patient_entry_counts(self.bundle.dataframe)
-        detailed_count = int((overview_df["Special Row"] != True).sum())
+        parsed_count = int((overview_df["Special Row"] != True).sum())
         special_count = int((overview_df["Special Row"] == True).sum())
         single_entry_count = sum(1 for count in entry_counts.values() if count == 1)
         pair_alert_count = 0
@@ -1761,13 +2032,13 @@ class MainWindow(QMainWindow):
             if pair_alert_triggered(pair_df, self.pair_alert_threshold):
                 pair_alert_count += 1
         self.processed_value.setText(str(len(overview_df)))
-        self.review_value.setText(str(len(self.bundle.manual_patients)))
+        self.review_value.setText(str(len(self.review_patients)))
         self.averaged_value.setText(str(len(self.bundle.analyzed_df)))
         self.special_value.setText(str(special_count))
 
         self.summary_label.setText(
             f"{len(overview_df)} file(s) processed. "
-            f"{detailed_count} detailed report row(s), "
+            f"{parsed_count} parsed report row(s), "
             f"{special_count} special row(s), "
             f"{single_entry_count} single-entry patient(s), and "
             f"{pair_alert_count} selected pair alert(s) above {self.pair_alert_threshold:.1f} mmHg."
@@ -1846,11 +2117,11 @@ class MainWindow(QMainWindow):
         self.patient_list.blockSignals(True)
         self.patient_list.clear()
 
-        if not self.bundle or not self.bundle.manual_patients:
+        if not self.bundle or not self.review_patients:
             self.review_status_label.setText(
-                "No overrides are needed. Automatic pairing is ready."
+                "No review is required. Automatic pairing is ready."
                 if self.records
-                else "Patients with more than two entries appear here after processing."
+                else "Patients needing review will appear here after processing."
             )
             self.review_count_badge.setText("0")
             self.review_queue_badge.setText("0")
@@ -1859,25 +2130,33 @@ class MainWindow(QMainWindow):
             self.selected_files_label.setText("")
             self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
+            self.review_warning_label.hide()
+            self.approve_pair_button.hide()
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
             self.patient_list.blockSignals(False)
             return
 
         current_patient = preserve_patient_id or self.current_manual_patient_id()
-        patient_count = len(self.bundle.manual_patients)
+        patient_count = len(self.review_patients)
         self.review_count_badge.setText(str(patient_count))
         self.review_queue_badge.setText(str(patient_count))
         self.review_status_label.setText(
-            "Auto pairs are preselected. Change only the patients you want to override."
+            "Auto pairs are preselected. Review multi-entry groups and approve alerted two-entry pairs before export."
         )
 
         selected_row = 0
-        for row_index, patient_id in enumerate(self.bundle.manual_patients):
+        for row_index, patient_id in enumerate(self.review_patients):
             selection = self.manual_pairs.get(patient_id, [])
-            label = f"{patient_id} ({len(selection)}/2 selected)"
+            reason = self._review_reason(patient_id)
+            if self._requires_alert_approval(patient_id):
+                approval = "approved" if patient_id in self.pair_alert_approvals else "pending"
+                label = f"{patient_id} ({reason}, {approval})"
+            else:
+                label = f"{patient_id} ({reason}, {len(selection)}/2 selected)"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, patient_id)
+            item.setToolTip(f"{patient_id}: {reason}")
             self.patient_list.addItem(item)
             if patient_id == current_patient:
                 selected_row = row_index
@@ -1908,6 +2187,8 @@ class MainWindow(QMainWindow):
             self.selected_files_label.setText("")
             self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
+            self.review_warning_label.hide()
+            self.approve_pair_button.hide()
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
             return
@@ -1919,6 +2200,8 @@ class MainWindow(QMainWindow):
             self.selected_files_label.setText("")
             self.review_selection_badge.setText("")
             self.review_warning_label.setText("")
+            self.review_warning_label.hide()
+            self.approve_pair_button.hide()
             self.pair_table.setRowCount(0)
             self._refresh_difference_table(None)
             return
@@ -1926,6 +2209,8 @@ class MainWindow(QMainWindow):
         rows = patient_rows(self.bundle.dataframe, patient_id)
         selection = self.manual_pairs.get(patient_id, [])
         auto_pair = set(self.auto_pairs.get(patient_id, ()))
+        requires_approval = self._requires_alert_approval(patient_id)
+        is_approved = patient_id in self.pair_alert_approvals
 
         self.current_patient_label.setText(patient_id)
         self.selection_label.setText("Choose two rows to average for export.")
@@ -1935,15 +2220,30 @@ class MainWindow(QMainWindow):
                 file_name = rows.loc[frame_index].get("Source File")
                 if file_name:
                     selected_files.append(str(file_name))
-        if len(selection) == 2:
+        if len(selection) == 2 and requires_approval and not is_approved:
+            self.review_selection_badge.setObjectName("neutralPill")
+            self.review_selection_badge.setText("Approval required")
+            self.selected_files_label.setText(
+                "Selected files: " + " | ".join(selected_files)
+                if selected_files
+                else "Selected files: automatic pair"
+            )
+            self.review_warning_label.setText(
+                f"This two-entry pair exceeded the alert threshold of {self.pair_alert_threshold:.1f} mmHg and must be approved before export."
+            )
+            self.review_warning_label.show()
+        elif len(selection) == 2:
             self.review_selection_badge.setObjectName("successPill")
-            self.review_selection_badge.setText("Ready for export")
+            self.review_selection_badge.setText(
+                "Approved for export" if requires_approval and is_approved else "Ready for export"
+            )
             self.selected_files_label.setText(
                 "Selected files: " + " | ".join(selected_files)
                 if selected_files
                 else "Selected files: automatic pair"
             )
             self.review_warning_label.setText("")
+            self.review_warning_label.hide()
         else:
             self.review_selection_badge.setObjectName("neutralPill")
             self.review_selection_badge.setText(f"{len(selection)}/2 selected")
@@ -1953,9 +2253,15 @@ class MainWindow(QMainWindow):
                 else "Selected files: none selected yet"
             )
             self.review_warning_label.setText("")
+            self.review_warning_label.hide()
         self.selected_files_label.setToolTip("\n".join(selected_files) if selected_files else "")
         self.review_selection_badge.style().unpolish(self.review_selection_badge)
         self.review_selection_badge.style().polish(self.review_selection_badge)
+        self.approve_pair_button.setVisible(requires_approval)
+        self.approve_pair_button.setEnabled(
+            requires_approval and len(selection) == 2 and not is_approved
+        )
+        self.approve_pair_button.setText("Pair approved" if is_approved else "Approve pair")
 
         self.updating_pair_table = True
         self.pair_table.setRowCount(len(rows))
@@ -2019,11 +2325,22 @@ class MainWindow(QMainWindow):
         self.manual_pairs[patient_id] = (
             auto_selection[:2] if len(auto_selection) == 2 else fallback
         )
+        self.pair_alert_approvals.discard(patient_id)
         self._render_current_patient()
         self._refresh_difference_table(patient_id)
         self._rebuild_analysis(preserve_patient_id=patient_id)
         if self.current_manual_patient_id() == patient_id:
             self._refresh_difference_table(patient_id)
+
+    def approve_current_pair(self) -> None:
+        patient_id = self.current_manual_patient_id()
+        if not patient_id or patient_id not in self.alert_review_patients:
+            return
+        if len(self.manual_pairs.get(patient_id, [])) != 2:
+            return
+        self.pair_alert_approvals.add(patient_id)
+        self._refresh_review_panel(preserve_patient_id=patient_id)
+        self._sync_controls()
 
     def _settings_changed(self) -> None:
         if self.updating_settings:
@@ -2083,6 +2400,7 @@ class MainWindow(QMainWindow):
             selection.remove(frame_index)
 
         self.manual_pairs[patient_id] = selection
+        self.pair_alert_approvals.discard(patient_id)
         self._refresh_difference_table(patient_id)
         self._rebuild_analysis(preserve_patient_id=patient_id)
 
@@ -2293,8 +2611,11 @@ class MainWindow(QMainWindow):
     def manual_review_complete(self) -> bool:
         if not self.bundle:
             return False
-        for patient_id in self.bundle.manual_patients:
+        for patient_id in self.review_patients:
             if len(self.manual_pairs.get(patient_id, [])) != 2:
+                return False
+        for patient_id in self.alert_review_patients:
+            if patient_id not in self.pair_alert_approvals:
                 return False
         return True
 
@@ -2360,6 +2681,8 @@ class MainWindow(QMainWindow):
             self.clear_files_button,
             self.browse_output_button,
             self.output_line,
+            self.report_mode_combo,
+            self.grouping_mode_combo,
             self.process_button,
             self.export_button,
             self.reset_auto_button,
@@ -2378,8 +2701,12 @@ class MainWindow(QMainWindow):
         has_output = bool(self.output_line.text().strip())
         is_processing = self.thread is not None
         has_records = bool(self.records)
-        has_manual_patients = bool(self.bundle and self.bundle.manual_patients)
+        has_review_patients = bool(self.review_patients)
         manual_complete = self.manual_review_complete() if has_records else False
+
+        self.workflow_tabs.setTabEnabled(1, has_records)
+        if not has_records and self.workflow_tabs.currentIndex() == 1:
+            self.workflow_tabs.setCurrentIndex(0)
 
         self.remove_files_button.setEnabled(has_files and not is_processing)
         self.clear_files_button.setEnabled(has_files and not is_processing)
@@ -2397,9 +2724,15 @@ class MainWindow(QMainWindow):
             has_records and self.all_data_table.currentRow() >= 0 and not is_processing
         )
         self.view_pair_pdf_button.setEnabled(
-            has_manual_patients and self.pair_table.currentRow() >= 0 and not is_processing
+            has_review_patients and self.pair_table.currentRow() >= 0 and not is_processing
         )
-        self.reset_auto_button.setEnabled(has_manual_patients and not is_processing)
+        self.reset_auto_button.setEnabled(has_review_patients and not is_processing)
+        self.approve_pair_button.setEnabled(
+            self.approve_pair_button.isVisible()
+            and not is_processing
+            and self.current_manual_patient_id() not in self.pair_alert_approvals
+        )
+        self._refresh_setup_summary()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.thread is not None:
