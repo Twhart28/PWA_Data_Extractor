@@ -1,108 +1,127 @@
 # PWA Data Extractor
 
-Desktop utility for extracting measurements from PWA detailed report PDFs, reviewing repeated measurements, and exporting averaged patient data to Excel.
+Desktop utility for extracting PWA PDF reports, reviewing repeated measurements, and exporting an Excel workbook with raw, kept, averaged, and skipped-file data.
 
-## What This Is For
+## What This App Does
 
-This tool is used when you have one or more PWA detailed report PDFs and want to turn them into a structured Excel workbook.
+The app processes PWA **Detailed** or **Clinical** report PDFs locally. It extracts measurements, groups files by subject/visit/timepoint, chooses the best two repeated measurements for averaging, and exports a structured Excel workbook.
 
-The main use case is not just raw extraction. The app is designed to:
+Use the **Report type** selector before processing:
 
-- extract measurement fields from PWA detailed reports
-- group repeated entries by patient
-- choose the best two measurements to keep for averaging
-- let you manually review patients with more than two entries
-- export both the detailed rows and the final averaged patient rows
+- **Detailed**: full PWA detailed-report field set.
+- **Clinical**: shorter clinical-report field set. Empty detailed-only columns are hidden from the app tables and Excel export.
 
-This is useful when a patient has multiple PWA recordings and you want a cleaner final dataset built from the best matching pair.
+Files that do not match the selected report type are not averaged. They are listed in the export's `Skipped Files` sheet.
 
-## Expected Input
+## Import Workflow
 
-Use PWA **Detailed Reports** in PDF format.
+1. Add PDF files by dragging them into the source panel or browsing.
+2. Choose **Detailed** or **Clinical** report mode.
+3. Choose how filenames should be grouped: subject only, subject + timepoint, subject + visit, or subject + visit + timepoint.
+4. Optionally paste a custom filename regex.
+5. Choose the output workbook path.
+6. Process PDFs.
+7. Review flagged patients.
+8. Export the workbook.
 
-The app will also detect:
+You can remove selected files from the import list or clear the list entirely before processing.
 
-- **Clinical reports**
-- **unrecognized PDFs**
+## Filename Grouping
 
-Those are still surfaced in the export as special rows so they are visible, but they are not treated as normal detailed-report data for averaging.
+The app groups rows by the parsed **Patient ID**. Patient ID is built from filename parts according to the selected grouping mode.
 
-## Core Workflow
+The built-in parser handles common filename patterns and preserves study prefixes, such as `IAS003`.
 
-1. Add one or more PWA detailed report PDFs.
-2. Choose where the Excel workbook should be saved.
-3. Process the PDFs locally.
-4. Review any patients with more than two entries.
-5. Export the workbook.
+Examples:
 
-## How Patient Averaging Works
+- `IAS003 PWA1.pdf` -> subject `IAS003`
+- `IAS003_T2 PWA1.pdf` -> subject `IAS003`, timepoint `2`
 
-If a patient has exactly two valid entries, that pair is used automatically.
+Suffixes such as `PWA1`, `PWA2`, `Report1`, or `Run1` are treated as measurement/report suffixes, not timepoints, unless an explicit timepoint token is present.
 
-If a patient has more than two valid entries, the app preselects an automatic pair and sends that patient to the **Multi-entry review** tab.
+## Custom Filename Regex
 
-In review, you choose exactly two rows to keep for export. The app also shows:
+Leave the regex field blank to use the built-in parser.
 
-- the currently selected pair
-- absolute differences between the selected rows
-- pair alerts when the selected measurements differ beyond the configured threshold
+For unusual filename formats, use **Copy regex prompt**. Paste that prompt into an AI with your example filenames. The prompt asks the AI to first determine the expected subject, visit, and timepoint outputs, ask follow-up questions if needed, and only then return a Python regex.
 
-## Auto-Pairing Logic
+The final regex must use Python named capture groups:
 
-The current pairing behavior is preserved from the original tool.
+- `(?P<subject>...)` is required.
+- `(?P<visit>...)` is optional.
+- `(?P<timepoint>...)` is optional.
 
-By default, automatic pairing is based on:
+The app matches the regex against the filename without the `.pdf` extension.
 
-- **Peripheral Systolic Pressure (mmHg)**
+## Review Logic
 
-When a patient has more than two entries, the app checks all possible 2-row combinations and selects the closest pair based on the configured analysis mode.
+If a subject has exactly two valid entries, that pair is selected automatically.
 
-## Output Workbook
+If a subject has more than two valid entries, the app preselects the closest automatic pair and sends the subject to review. In review, choose exactly two measurements to keep.
 
-The export preserves the workbook structure used by the original tool:
+Subjects with exactly two entries can also be sent to review when their pair differences exceed the alert threshold.
+
+Review tools include:
+
+- selected-pair difference boxes
+- green/yellow/red pair-difference highlights
+- keep buttons for choosing exactly two rows
+- reset to automatic pairing
+- PDF viewing from table rows
+- confirm-pair tracking
+
+## Pair-Difference Thresholds
+
+The import screen has two pair-difference thresholds:
+
+- **Green up to**: differences at or below this value are green.
+- **Alert above**: differences above this value are red and are flagged for review.
+
+Values between those two thresholds are yellow.
+
+The default alert threshold is `6.0 mmHg`.
+
+## Export Workbook
+
+The export contains four sheets:
+
+`All Data`
+
+- all parsed rows for the selected report mode
+- wrong-type and unrecognized rows as visible skipped/special rows
+- review status for each row
+
+`Kept Data`
+
+- only rows selected for averaging
+
+`Averaged Data`
+
+- one row per averaged subject
+- averaged measurement values
+- pair-difference columns
+- pair-alert fields
+
+`Skipped Files`
+
+- subjects with only one uploaded file
+- files skipped because they were the wrong report type
+- unrecognized PDFs
+- a reason column explaining why each file was skipped
+
+## Clinical Mode Export
+
+When **Clinical** mode is selected, the app hides detailed-only columns in:
 
 - `All Data`
 - `Kept Data`
 - `Averaged Data`
 
-### Sheet Summary
+This keeps the Clinical workbook focused on fields available from Clinical reports.
 
-`All Data`
+## Local Processing
 
-- all parsed detailed-report rows
-- special rows for clinical or unrecognized PDFs
-- review status and pairing context
-
-`Kept Data`
-
-- the rows that were selected to be kept for averaging
-
-`Averaged Data`
-
-- one averaged row per patient based on the final selected pair
-- pair-difference and alert-related fields used for downstream review
-
-## Review Features
-
-The desktop UI includes:
-
-- overview of processed files and review counts
-- multi-entry review queue
-- pair selection with keep checkboxes
-- absolute-difference display for the selected pair
-- configurable highlight thresholds
-- configurable pair-alert threshold
-- PDF preview for the selected source file
-
-## Threshold Settings
-
-The settings panel lets you adjust:
-
-- green highlight threshold
-- yellow highlight threshold
-- pair-alert threshold
-
-These settings affect the review display and alert behavior for the current session.
+All PDF parsing and Excel export happen locally on this computer. The app does not upload PDF contents.
 
 ## Run Locally
 
@@ -119,14 +138,6 @@ These settings affect the review display and alert behavior for the current sess
 
 ## Build Installer
 
-This project includes an Inno Setup installer script for non-technical users.
-
-1. Install Inno Setup
-2. Build the portable executable
-3. Build the installer
-
-Or use the bundled release script:
-
 ```powershell
 .\build_release.ps1
 ```
@@ -136,21 +147,15 @@ That produces:
 - `dist\pwa_extractor.exe`
 - `release\PWA_Data_Extractor_Setup.exe`
 
-## Project Layout
+## Project Files
 
 - `pwa_extractor.py`: launcher entry point
 - `app.py`: PySide6 desktop user interface
 - `backend.py`: PDF parsing, pairing logic, and Excel export
+- `README.md`: in-app help shown from the top-right `?` button
 - `pwa_extractor.spec`: PyInstaller build spec
 - `pwa_extractor_installer.iss`: Inno Setup installer script
-- `build_release.ps1`: release build script for the portable app and installer
-
-## Notes
-
-- Processing is local.
-- Detailed reports are the intended source files.
-- Clinical reports and unrecognized PDFs remain visible in export as special rows.
-- The app is built to preserve the existing extraction and pairing behavior while improving review workflow and usability.
+- `build_release.ps1`: release build script
 
 ## Contact
 
