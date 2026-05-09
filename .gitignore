@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 .codex/
 .claude/
+.v2_review/
+design_mockup.html
 frontend/.vite/
 frontend/dist/
 frontend/node_modules/
