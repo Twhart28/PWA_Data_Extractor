@@ -643,18 +643,12 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(10)
 
-        # Logo dot
-        logo = QLabel("P")
-        logo.setObjectName("logoDot")
-        logo.setFixedSize(22, 22)
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title = QLabel(APP_TITLE)
         title.setObjectName("brandTitle")
 
         version = QLabel(f"v{APP_VERSION}")
         version.setObjectName("brandVersion")
 
-        layout.addWidget(logo)
         layout.addWidget(title)
         layout.addWidget(version)
         layout.addStretch(1)
@@ -2521,14 +2515,6 @@ QFrame#titlebar {
 }
 QLabel#brandTitle { font-weight: 600; font-size: 14px; color: #0f172a; }
 QLabel#brandVersion { color: #94a3b8; font-size: 12px; }
-QLabel#logoDot {
-    background: #0f766e;
-    color: white;
-    font-weight: 700;
-    border-radius: 6px;
-    padding: 2px 0;
-    qproperty-alignment: AlignCenter;
-}
 QToolButton#titlebarIcon {
     border: 1px solid transparent;
     border-radius: 6px;
