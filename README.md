@@ -2,6 +2,15 @@
 
 Desktop utility for extracting PWA PDF reports, reviewing repeated measurements, and exporting an Excel workbook with raw, kept, averaged, and skipped-file data.
 
+## Version Lineage
+
+This repository now has two clearly separated app versions:
+
+- **v1** is the released baseline on `main` and tag `v1.0.0`. It is the original detailed-report desktop extractor and release-packaging flow.
+- **v2** is the workflow in this branch/PR. It keeps the Python/PySide desktop app shape but adds the redesigned wizard UI, Detailed/Clinical report modes, filename grouping and AI-assisted regex support, expanded review alerts, Clinical-specific exports, and the `Skipped Files` workbook sheet.
+
+The v2 source still lives in the same main app files: `app.py`, `backend.py`, `pwa_extractor.py`, and `README.md`. Local mockups, Claude settings, and review scratch files are not app source and are ignored by Git.
+
 ## What This App Does
 
 The app processes PWA **Detailed** or **Clinical** report PDFs locally. It extracts measurements, groups files by subject/visit/timepoint, chooses the best two repeated measurements for averaging, and exports a structured Excel workbook.
