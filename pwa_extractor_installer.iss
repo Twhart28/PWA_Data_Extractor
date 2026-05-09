@@ -1,5 +1,5 @@
 #define AppName "PWA Data Extractor"
-#define AppVersion "1.0.0"
+#define AppVersion "2.0.0"
 #define AppPublisher "Thomas Hart"
 #define AppURL "https://github.com/Twhart28/PWA_Data_Extractor"
 #define AppExeName "pwa_extractor.exe"
